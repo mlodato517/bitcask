@@ -3,6 +3,8 @@
 //!
 //! Built following https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md.
 
+mod command;
 mod kv_store;
 
-pub use kv_store::KvStore;
+pub(crate) use command::Command;
+pub use kv_store::{KvStore, Result};
