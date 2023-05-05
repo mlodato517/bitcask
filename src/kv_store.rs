@@ -4,36 +4,30 @@ use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader, Seek, Write};
+use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
+use crate::file_util;
 use crate::Command;
 
-// TODO Configurable? Factors to keep in mind:
-// 1. don't want too many open files probably
-// 2. don't want to have files so big that rewriting the index takes so much memory
-// 3. don't want files so small that we have to open new ones all the time
-//
-// Also, we should probably compact based on some knowledge of dead values vs the number of open
-// files. If all the files are open but contain unique data then we'll just be retriggering
-// compactions with no benefit. We could, when we update the file index of a value, increment some
-// counter and when we have enough "dead" lines we can compact. This assumes that a majority of
-// those dead lines are in immutable files but we could also keep track of that because, when we
-// update a value
+// TODO Need to find a balance between:
+//     1. Not opening too many files (i.e. larger files)
+//     2. Having files be quick to read in (i.e. smaller files)
 const FILE_SIZE_LIMIT: u64 = 1024 * 1024;
-const FILE_LIMIT: usize = 8;
-
 const ACTIVE_FILE_IDX: usize = usize::MAX;
 
 /// A key-value store to associate values with keys. Key-value pairs can be inserted, looked up,
 /// and removed.
-pub struct KvStore {
-    index: HashMap<String, Index>,
+pub struct KvStore<C> {
     active_file: LogFile,
-    immutable_files: Vec<LogFile>,
+    compaction_policy: C,
+    dead_data_count: usize,
     dir: PathBuf,
+    immutable_files: Vec<LogFile>,
+    index: HashMap<String, Index>,
 }
 struct Index {
     file_idx: usize,
@@ -45,7 +39,7 @@ struct LogFile {
 }
 impl LogFile {
     fn new(path: PathBuf) -> Result<Self> {
-        open_file(&path).map(|file| Self { path, file })
+        file_util::open_file(&path).map(|file| Self { path, file })
     }
 }
 
@@ -67,9 +61,16 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl KvStore {
+impl KvStore<MaxFilePolicy> {
     /// TODO
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore<MaxFilePolicy>> {
+        Self::open_with_policy(path, MaxFilePolicy::default())
+    }
+}
+
+impl<C> KvStore<C> {
+    /// TODO
+    pub fn open_with_policy(path: impl Into<PathBuf>, compaction_policy: C) -> Result<Self> {
         let dir_path = path.into();
         let dir = std::fs::read_dir(&dir_path)?;
         let mut paths = dir
@@ -81,7 +82,7 @@ impl KvStore {
         let active_file = paths.pop().unwrap_or_else(|| {
             let mut buf = dir_path.clone();
             // TODO versioning
-            buf.push(file_name());
+            buf.push(file_util::file_name());
             buf
         });
         let active_file = LogFile::new(active_file)?;
@@ -91,23 +92,18 @@ impl KvStore {
             .map(LogFile::new)
             .collect::<Result<Vec<_>>>()?;
 
-        let mut this = Self {
+        let mut this = KvStore {
             index: Default::default(),
             active_file,
             immutable_files,
             dir: dir_path,
+            dead_data_count: 0,
+            compaction_policy,
         };
 
         this.hydrate()?;
 
         Ok(this)
-    }
-
-    /// Associate the passed value with the passed key in the store. This can later be retrieved
-    /// with `get`.
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let cmd = Command::Set(key.into(), value.into());
-        self.write_cmd(cmd)
     }
 
     /// Gets the value currently associated with the key, if there is one.
@@ -124,20 +120,9 @@ impl KvStore {
                     ACTIVE_FILE_IDX => &self.active_file.file,
                     idx => &self.immutable_files[idx].file,
                 };
-                seek_file_for_value(file, *file_offset)
+                file_util::seek_file_for_value(file, *file_offset)
             }
             None => Ok(None),
-        }
-    }
-
-    /// Removes the associated value for the specified key.
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        match self.get(&*key)? {
-            Some(_) => {
-                let cmd = Command::Rm(key.into());
-                self.write_cmd(cmd)
-            }
-            None => Err(Error::KeyNotFound),
         }
     }
 
@@ -145,7 +130,9 @@ impl KvStore {
     /// just read the most recent command for the key in the file.
     fn hydrate(&mut self) -> Result<()> {
         for (file_idx, f) in self.immutable_files.iter_mut().enumerate() {
-            Self::hydrate_file(&mut self.index, &mut f.file, file_idx)?;
+            // Count up the size of dead records in immutable files. When there are "enough", we
+            // can compact all the immutable files into a single file.
+            self.dead_data_count += Self::hydrate_file(&mut self.index, &mut f.file, file_idx)?;
         }
         Self::hydrate_file(&mut self.index, &mut self.active_file.file, ACTIVE_FILE_IDX)?;
         Ok(())
@@ -155,7 +142,8 @@ impl KvStore {
         in_memory_index: &mut HashMap<String, Index>,
         file: &mut File,
         file_idx: usize,
-    ) -> Result<()> {
+    ) -> Result<usize> {
+        let mut dead_data_count = 0;
         file.rewind()?;
         let mut f = BufReader::new(file);
 
@@ -170,56 +158,20 @@ impl KvStore {
                 file_idx,
                 file_offset,
             };
-            match command {
+            let previous_value = match command {
                 Command::Set(key, _) => in_memory_index.insert(key.into_owned(), index),
+                // TODO Do we need to store these?
                 Command::Rm(key) => in_memory_index.insert(key.into_owned(), index),
             };
+            if let Some(_previous_value) = previous_value {
+                dead_data_count += 1;
+            }
 
             file_offset += line_len as u64;
             line.clear();
         }
-        Ok(())
-    }
 
-    /// Appends the command to the end of the file with a trailing newline
-    fn write_cmd(&mut self, cmd: Command) -> Result<()> {
-        let f = &mut self.active_file;
-        let file_offset = f.file.metadata()?.len();
-        writeln!(f.file, "{}", serde_json::to_string(&cmd)?)?;
-
-        let key = match cmd {
-            Command::Rm(key) => key,
-            Command::Set(key, _) => key,
-        };
-
-        let index = Index {
-            file_offset,
-            file_idx: ACTIVE_FILE_IDX,
-        };
-
-        self.index.insert(key.into_owned(), index);
-
-        if file_offset > FILE_SIZE_LIMIT {
-            let mut next_file = self.dir.clone();
-            next_file.push(file_name());
-            let file = LogFile::new(next_file)?;
-            let old_file = std::mem::replace(&mut self.active_file, file);
-            self.immutable_files.push(old_file);
-
-            // Any indexed values for the active file now get moved to reference the immutable file
-            // list.
-            for file_index in self.index.values_mut() {
-                if file_index.file_idx == ACTIVE_FILE_IDX {
-                    file_index.file_idx = self.immutable_files.len() - 1;
-                }
-            }
-        }
-        if self.immutable_files.len() > FILE_LIMIT {
-            println!("Compacting files");
-            self.compactify()?;
-        }
-
-        Ok(())
+        Ok(dead_data_count)
     }
 
     // TODO More atomically? How do we handle concurrent compaction requests? Should probably take
@@ -239,7 +191,7 @@ impl KvStore {
     // https://github.com/basho/bitcask/blob/develop/doc/bitcask-intro.pdf
     fn compactify(&mut self) -> Result<()> {
         // TODO Hack to ensure we don't consider this file active the next time around
-        let compacted_file_name = format!("0000-{}", file_name());
+        let compacted_file_name = format!("0000-{}", file_util::file_name());
         let mut compacted_path = self.dir.clone();
         compacted_path.push(compacted_file_name);
         let mut compacted_file = LogFile::new(compacted_path)?;
@@ -252,7 +204,7 @@ impl KvStore {
             // TODO Extract with write_cmd
             let file_offset = compacted_file.file.metadata()?.len();
             let file = &self.immutable_files[file_index.file_idx].file;
-            let value = seek_file_for_value(file, file_index.file_offset)?
+            let value = file_util::seek_file_for_value(file, file_index.file_offset)?
                 .expect("Values in the index should be present");
             let cmd = Command::Set(Cow::Borrowed(key), Cow::Owned(value));
             writeln!(&mut compacted_file.file, "{}", serde_json::to_string(&cmd)?)?;
@@ -267,36 +219,77 @@ impl KvStore {
         }
         self.immutable_files.push(compacted_file);
 
+        // TODO LIES
+        self.dead_data_count = 0;
+
         Ok(())
     }
 }
 
-fn open_file(path: impl AsRef<Path>) -> Result<File> {
-    Ok(std::fs::File::options()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(path)?)
-}
+impl<C: CompactionPolicy> KvStore<C> {
+    /// Associate the passed value with the passed key in the store. This can later be retrieved
+    /// with `get`.
+    pub fn set(&mut self, key: String, value: String) -> Result<()> {
+        let cmd = Command::Set(key.into(), value.into());
+        self.write_cmd(cmd)
+    }
 
-fn file_name() -> String {
-    // TODO versioning
-    format!(
-        "{}.log",
-        time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .expect("RFC-3339 is a valid format")
-    )
-}
-fn seek_file_for_value(file: &File, file_offset: u64) -> Result<Option<String>> {
-    let mut f = BufReader::new(file);
-    f.seek(SeekFrom::Start(file_offset))?;
-    let line = f.lines().next().expect("Should be a line here")?;
+    /// Removes the associated value for the specified key.
+    pub fn remove(&mut self, key: String) -> Result<()> {
+        match self.get(&*key)? {
+            Some(_) => self.write_cmd(Command::Rm(key.into())),
+            None => Err(Error::KeyNotFound),
+        }
+    }
 
-    // TODO Consider -O mode or something to switch from JSON to something tighter
-    let cmd: Command = serde_json::from_str(&line)?;
-    match cmd {
-        Command::Set(_, value) => Ok(Some(value.into_owned())),
-        Command::Rm(_) => Ok(None),
+    /// Appends the command to the end of the file with a trailing newline
+    fn write_cmd(&mut self, cmd: Command) -> Result<()> {
+        let f = &mut self.active_file;
+        let file_offset = f.file.metadata()?.len();
+        writeln!(f.file, "{}", serde_json::to_string(&cmd)?)?;
+
+        let key = match cmd {
+            Command::Rm(key) => key,
+            Command::Set(key, _) => key,
+        };
+
+        let index = Index {
+            file_offset,
+            file_idx: ACTIVE_FILE_IDX,
+        };
+
+        if let Some(previous_value) = self.index.insert(key.into_owned(), index) {
+            if previous_value.file_idx != ACTIVE_FILE_IDX {
+                self.dead_data_count += 1;
+            }
+        }
+
+        // TODO Configure?
+        if file_offset > FILE_SIZE_LIMIT {
+            let mut next_file = self.dir.clone();
+            next_file.push(file_util::file_name());
+            let file = LogFile::new(next_file)?;
+            let old_file = std::mem::replace(&mut self.active_file, file);
+            self.immutable_files.push(old_file);
+
+            // Any indexed values for the active file now get moved to reference the immutable file
+            // list.
+            for file_index in self.index.values_mut() {
+                if file_index.file_idx == ACTIVE_FILE_IDX {
+                    file_index.file_idx = self.immutable_files.len() - 1;
+                }
+            }
+        }
+
+        let state = CompactionContext {
+            open_immutable_files: self.immutable_files.len(),
+            dead_commands: self.dead_data_count,
+        };
+
+        if CompactionPolicy::should_compact(&self.compaction_policy, state) {
+            self.compactify()?;
+        }
+
+        Ok(())
     }
 }
