@@ -4,6 +4,8 @@
 //! Built following https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md.
 
 mod command;
+mod compaction_policy;
+mod file_util;
 mod kv_store;
 
 pub(crate) use command::Command;
