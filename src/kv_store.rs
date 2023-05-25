@@ -8,8 +8,10 @@ use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
 use thiserror::Error;
+use tracing::debug;
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
+use crate::engine::KvsEngine;
 use crate::file_util;
 use crate::Command;
 
@@ -21,7 +23,7 @@ const ACTIVE_FILE_IDX: usize = usize::MAX;
 
 /// A key-value store to associate values with keys. Key-value pairs can be inserted, looked up,
 /// and removed.
-pub struct KvStore<C> {
+pub struct KvStore<C = MaxFilePolicy> {
     active_file: LogFile,
     compaction_policy: C,
     dead_data_count: usize,
@@ -57,6 +59,12 @@ pub enum Error {
 
     #[error("Not a directory")]
     InvalidDirectory,
+
+    #[error("You're a quitter")]
+    JustUseAnyhow,
+
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -81,7 +89,6 @@ impl<C> KvStore<C> {
 
         let active_file = paths.pop().unwrap_or_else(|| {
             let mut buf = dir_path.clone();
-            // TODO versioning
             buf.push(file_util::file_name());
             buf
         });
@@ -104,26 +111,6 @@ impl<C> KvStore<C> {
         this.hydrate()?;
 
         Ok(this)
-    }
-
-    /// Gets the value currently associated with the key, if there is one.
-    pub fn get<K>(&self, key: K) -> Result<Option<String>>
-    where
-        K: Borrow<str> + Eq + Hash,
-    {
-        match self.index.get(key.borrow()) {
-            Some(Index {
-                file_offset,
-                file_idx,
-            }) => {
-                let file = match *file_idx {
-                    ACTIVE_FILE_IDX => &self.active_file.file,
-                    idx => &self.immutable_files[idx].file,
-                };
-                file_util::seek_file_for_value(file, *file_offset)
-            }
-            None => Ok(None),
-        }
     }
 
     /// Builds an index of log pointers from the stored path. After this, gets are optimized to
@@ -160,8 +147,7 @@ impl<C> KvStore<C> {
             };
             let previous_value = match command {
                 Command::Set(key, _) => in_memory_index.insert(key.into_owned(), index),
-                // TODO Do we need to store these?
-                Command::Rm(key) => in_memory_index.insert(key.into_owned(), index),
+                Command::Rm(key) => in_memory_index.remove(key.as_ref()),
             };
             if let Some(_previous_value) = previous_value {
                 dead_data_count += 1;
@@ -172,6 +158,25 @@ impl<C> KvStore<C> {
         }
 
         Ok(dead_data_count)
+    }
+
+    fn get<K>(&mut self, key: K) -> Result<Option<String>>
+    where
+        K: Borrow<str> + Hash + Eq,
+    {
+        match self.index.get(key.borrow()) {
+            Some(Index {
+                file_offset,
+                file_idx,
+            }) => {
+                let file = match *file_idx {
+                    ACTIVE_FILE_IDX => &self.active_file.file,
+                    idx => &self.immutable_files[idx].file,
+                };
+                file_util::seek_file_for_value(file, *file_offset)
+            }
+            None => Ok(None),
+        }
     }
 
     // TODO More atomically? How do we handle concurrent compaction requests? Should probably take
@@ -207,7 +212,9 @@ impl<C> KvStore<C> {
             let value = file_util::seek_file_for_value(file, file_index.file_offset)?
                 .expect("Values in the index should be present");
             let cmd = Command::Set(Cow::Borrowed(key), Cow::Owned(value));
-            writeln!(&mut compacted_file.file, "{}", serde_json::to_string(&cmd)?)?;
+
+            serde_json::to_writer(&mut compacted_file.file, &cmd)?;
+            writeln!(&mut compacted_file.file)?;
 
             *file_index = Index {
                 file_idx: 0,
@@ -227,26 +234,13 @@ impl<C> KvStore<C> {
 }
 
 impl<C: CompactionPolicy> KvStore<C> {
-    /// Associate the passed value with the passed key in the store. This can later be retrieved
-    /// with `get`.
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let cmd = Command::Set(key.into(), value.into());
-        self.write_cmd(cmd)
-    }
-
-    /// Removes the associated value for the specified key.
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        match self.get(&*key)? {
-            Some(_) => self.write_cmd(Command::Rm(key.into())),
-            None => Err(Error::KeyNotFound),
-        }
-    }
-
     /// Appends the command to the end of the file with a trailing newline
     fn write_cmd(&mut self, cmd: Command) -> Result<()> {
         let f = &mut self.active_file;
         let file_offset = f.file.metadata()?.len();
-        writeln!(f.file, "{}", serde_json::to_string(&cmd)?)?;
+
+        serde_json::to_writer(&mut f.file, &cmd)?;
+        writeln!(&mut f.file)?;
 
         let key = match cmd {
             Command::Rm(key) => key,
@@ -291,5 +285,45 @@ impl<C: CompactionPolicy> KvStore<C> {
         }
 
         Ok(())
+    }
+}
+
+impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
+    /// Gets the value currently associated with the key, if there is one.
+    fn get<K: Borrow<str>>(&mut self, key: K) -> Result<Option<String>> {
+        match self.index.get(key.borrow()) {
+            Some(Index {
+                file_offset,
+                file_idx,
+            }) => {
+                let file = match *file_idx {
+                    ACTIVE_FILE_IDX => &self.active_file.file,
+                    idx => &self.immutable_files[idx].file,
+                };
+                file_util::seek_file_for_value(file, *file_offset)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Associate the passed value with the passed key in the store. This can later be retrieved
+    /// with `get`.
+    fn set<V: AsRef<str>>(&mut self, key: String, value: V) -> Result<()> {
+        let cmd = Command::Set(key.into(), Cow::Borrowed(value.as_ref()));
+        self.write_cmd(cmd)
+    }
+
+    /// Removes the associated value for the specified key.
+    fn remove<K: Borrow<str>>(&mut self, key: K) -> Result<()> {
+        match self.get(key.borrow())? {
+            Some(_) => {
+                debug!("Key found, deleting it");
+                self.write_cmd(Command::Rm(key.borrow().into()))
+            }
+            None => {
+                debug!("Key to remove not found");
+                Err(Error::KeyNotFound)
+            }
+        }
     }
 }

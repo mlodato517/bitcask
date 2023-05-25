@@ -3,10 +3,16 @@
 //!
 //! Built following https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md.
 
+mod client;
 mod command;
 mod compaction_policy;
+mod engine;
 mod file_util;
 mod kv_store;
+mod protocol;
 
+pub use client::KvsClient;
 pub(crate) use command::Command;
-pub use kv_store::{KvStore, Result};
+pub use engine::KvsEngine;
+pub use kv_store::{Error, KvStore, Result};
+pub use protocol::{Cmd, Response};
