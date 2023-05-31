@@ -38,10 +38,14 @@ struct Index {
 struct LogFile {
     path: PathBuf,
     file: File,
+    len: u64,
 }
 impl LogFile {
     fn new(path: PathBuf) -> Result<Self> {
-        file_util::open_file(&path).map(|file| Self { path, file })
+        file_util::open_file(&path).and_then(|file| {
+            let len = file.metadata()?.len();
+            Ok(Self { path, file, len })
+        })
     }
 }
 
@@ -180,15 +184,16 @@ impl<C> KvStore<C> {
             if file_index.file_idx == ACTIVE_FILE_IDX {
                 continue;
             }
-            // TODO Extract with write_cmd
-            let file_offset = compacted_file.file.metadata()?.len();
             let file = &self.immutable_files[file_index.file_idx].file;
             let value = file_util::seek_file_for_value(file, file_index.file_offset)?
                 .expect("Values in the index should be present");
             let cmd = Command::Set(Cow::Borrowed(key), Cow::Owned(value));
 
-            serde_json::to_writer(&mut compacted_file.file, &cmd)?;
-            writeln!(&mut compacted_file.file)?;
+            // TODO Extract with write_cmd
+            let file_offset = compacted_file.len;
+            let value = format!("{}\n", serde_json::to_string(&cmd)?);
+            compacted_file.len += value.len() as u64;
+            compacted_file.file.write_all(value.as_bytes())?;
 
             *file_index = Index {
                 file_idx: 0,
@@ -211,10 +216,13 @@ impl<C: CompactionPolicy> KvStore<C> {
     /// Appends the command to the end of the file with a trailing newline
     fn write_cmd(&mut self, cmd: Command) -> Result<()> {
         let f = &mut self.active_file;
-        let file_offset = f.file.metadata()?.len();
+        let file_offset = f.len;
 
-        serde_json::to_writer(&mut f.file, &cmd)?;
-        writeln!(&mut f.file)?;
+        // TODO Could we write directly to the file and get back out num bytes written?
+        // TODO Maybe handle carriage returns? `std::writln!` doesn't care :shrug:
+        let value = format!("{}\n", serde_json::to_string(&cmd)?);
+        f.len += value.len() as u64;
+        f.file.write_all(value.as_bytes())?;
 
         let key = match cmd {
             Command::Rm(key) => key,
