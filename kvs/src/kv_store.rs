@@ -63,11 +63,9 @@ impl<C> KvStore<C> {
             .collect::<Result<Vec<_>>>()?;
         paths.sort_unstable();
 
-        let active_file = paths.pop().unwrap_or_else(|| {
-            let mut buf = dir_path.clone();
-            buf.push(file_util::file_name());
-            buf
-        });
+        let active_file = paths
+            .pop()
+            .unwrap_or_else(|| dir_path.join(file_util::file_name()));
         let active_file = LogFile::new(active_file)?;
 
         let immutable_files = paths
@@ -236,8 +234,7 @@ impl<C: CompactionPolicy> KvStore<C> {
 
         // TODO Configure?
         if file_offset > FILE_SIZE_LIMIT {
-            let mut next_file = self.dir.clone();
-            next_file.push(file_util::file_name());
+            let next_file = self.dir.join(file_util::file_name());
             let file = LogFile::new(next_file)?;
             let old_file = std::mem::replace(&mut self.active_file, file);
             self.immutable_files.push(old_file);
