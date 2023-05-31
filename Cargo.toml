@@ -1,23 +1,13 @@
-[package]
-name = "kvs"
-version = "0.1.0"
-edition = "2021"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+members = [
+    "kvs",
+    "logging",
+    "protocol",
 
-[dependencies]
-anyhow = "1.0.71"
-clap = { version = "4.2.4", features = ["derive"] }
-serde = { version = "1.0.160", features = ["derive"] }
-serde_json = "1.0.96"
-# TODO Is there a way to keep this out of the library and prevent consumers from enabling this?
-sled = "0.34.7"
-time = { version = "0.3.20", features = ["formatting"] }
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["ansi", "env-filter"] }
+    "kvs-client",
+    "kvs-server",
 
-[dev-dependencies]
-assert_cmd = "2.0.11"
-predicates = "3.0.3"
-tempfile = "3.5.0"
-walkdir = "2.3.3"
+    # https://stackoverflow.com/a/71461114/2891835
+    "tests",
+]

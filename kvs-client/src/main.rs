@@ -3,12 +3,8 @@ use std::net::{Shutdown, TcpStream};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing::metadata::LevelFilter;
+use protocol::{Cmd, Response};
 use tracing::{debug, info};
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::{fmt, EnvFilter};
-
-use kvs::{Cmd, Response};
 
 #[derive(Parser)]
 #[command(version)]
@@ -27,15 +23,7 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    // TODO Extract log configuration
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stderr).with_ansi(false))
-        .with(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
+    logging::configure();
 
     let args = Args::parse();
 

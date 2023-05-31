@@ -5,12 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use tracing::metadata::LevelFilter;
+use kvs::{KvStore, KvsEngine};
+use protocol::Cmd;
 use tracing::{debug, info, warn};
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::{fmt, EnvFilter};
 
-use kvs::{Cmd, KvStore, KvsEngine};
 use sled_engine::SledDb;
 
 mod sled_engine;
@@ -29,14 +27,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stderr).with_ansi(false))
-        .with(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
+    logging::configure();
 
     let mut args = Args::parse();
 

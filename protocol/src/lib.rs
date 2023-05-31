@@ -1,9 +1,8 @@
 use std::borrow::Cow;
 use std::io::{Read, Write};
 
+use kvs::{Error, Result};
 use tracing::debug;
-
-use crate::{Error, Result};
 
 pub enum Response<'a> {
     Ok(&'a str),
