@@ -7,13 +7,13 @@ use std::hash::Hash;
 use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
-use thiserror::Error;
 use tracing::debug;
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
 use crate::engine::KvsEngine;
 use crate::file_util;
 use crate::Command;
+use crate::{Error, Result};
 
 // TODO Need to find a balance between:
 //     1. Not opening too many files (i.e. larger files)
@@ -44,30 +44,6 @@ impl LogFile {
         file_util::open_file(&path).map(|file| Self { path, file })
     }
 }
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    // TODO Realistically this is IO for writing to disk...
-    #[error(transparent)]
-    Serialize(#[from] serde_json::Error),
-
-    #[error("Key not found")]
-    KeyNotFound,
-
-    #[error("Not a directory")]
-    InvalidDirectory,
-
-    #[error("You're a quitter")]
-    JustUseAnyhow,
-
-    #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 impl KvStore<MaxFilePolicy> {
     /// TODO
@@ -322,7 +298,7 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
             }
             None => {
                 debug!("Key to remove not found");
-                Err(Error::KeyNotFound)
+                Err(Error::msg("Key not found"))
             }
         }
     }

@@ -17,7 +17,7 @@ impl KvsEngine for SledDb {
     fn set<V: AsRef<str>>(&mut self, key: String, value: V) -> Result<()> {
         let _ = self.0.insert(key, value.as_ref()).map_err(|e| {
             tracing::warn!(?e, "Failed to insert into sled");
-            Error::JustUseAnyhow
+            Error::msg("Failed to insert into sled")
         })?;
 
         // TODO This is still needed here despite the Drop impl. Maybe Drop isn't called when we
@@ -31,13 +31,13 @@ impl KvsEngine for SledDb {
     fn get<K: Borrow<str>>(&mut self, key: K) -> Result<Option<String>> {
         let maybe_result = sled::Tree::get(&self.0, key.borrow()).map_err(|e| {
             tracing::warn!(?e, "Failed to get from sled");
-            Error::JustUseAnyhow
+            Error::msg("Failed to read from sled")
         })?;
         match maybe_result {
             Some(ivec) => {
                 let s = std::str::from_utf8(ivec.as_ref()).map_err(|e| {
                     tracing::warn!(?e, "Invalid utf8 from sled");
-                    Error::JustUseAnyhow
+                    Error::msg("Invalid utf8 from sled")
                 })?;
                 Ok(Some(s.to_owned()))
             }
@@ -52,10 +52,10 @@ impl KvsEngine for SledDb {
         }
         match result {
             Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(Error::KeyNotFound),
+            Ok(None) => Err(Error::msg("Key not found")),
             Err(e) => {
                 tracing::warn!(?e, "Failed to remove from sled");
-                Err(Error::JustUseAnyhow)
+                Err(Error::msg("Failed to remove from sled"))
             }
         }
     }

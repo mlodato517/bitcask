@@ -1,10 +1,9 @@
 use std::borrow::Cow;
 use std::io::{Read, Write};
 
-use anyhow::anyhow;
 use tracing::debug;
 
-use crate::Result;
+use crate::{Error, Result};
 
 pub enum Response<'a> {
     Ok(&'a str),
@@ -19,7 +18,7 @@ impl<'a> Response<'a> {
         // Can just take the first 25 bytes or something to check lengths and commas and whatever.
         match server.read_to_end(result) {
             Ok(len) => len,
-            Err(e) => return Err(anyhow!("Failed to read data: {e:?}").into()),
+            Err(e) => return Err(Error::new(e).context("Failed to read data")),
         };
         let result = std::str::from_utf8(result);
         match result {
@@ -29,7 +28,7 @@ impl<'a> Response<'a> {
                 "e" => Ok(Self::Err(&response[1..])),
                 _ => Ok(Self::Err("Invalid start byte from server")),
             },
-            Err(_) => Err(anyhow!("Invalid utf8 from server").into()),
+            Err(_) => Err(Error::msg("Invalid utf8 from server")),
         }
     }
 }
@@ -48,15 +47,16 @@ impl<'a> Cmd<'a> {
             b @ b'g' | b @ b'r' => {
                 let mut parts = cmd[1..].splitn(2, |b| *b == b',');
 
-                let key_part = parts.next().ok_or_else(|| anyhow!("Missing key len"))?;
+                let key_part = parts.next().ok_or_else(|| Error::msg("Missing key len"))?;
                 let key_len = parse_ascii_len(key_part)?;
 
-                let rest = parts.next().ok_or_else(|| anyhow!("Missing data"))?;
+                let rest = parts.next().ok_or_else(|| Error::msg("Missing data"))?;
                 let key = rest
                     .get(..key_len)
-                    .ok_or_else(|| anyhow!("Not enough data for specified data lengths"))?;
+                    .ok_or_else(|| Error::msg("Not enough data for specified data lengths"))?;
 
-                let key = std::str::from_utf8(key).map_err(|e| anyhow!("Invalid key: {e:?}"))?;
+                let key =
+                    std::str::from_utf8(key).map_err(|e| Error::new(e).context("Invalid key"))?;
 
                 if b == b'g' {
                     Ok(Self::Get(Cow::Borrowed(key)))
@@ -67,21 +67,24 @@ impl<'a> Cmd<'a> {
             _ => {
                 let mut parts = cmd.splitn(3, |b| *b == b',');
 
-                let key_part = parts.next().ok_or_else(|| anyhow!("Missing key len"))?;
+                let key_part = parts.next().ok_or_else(|| Error::msg("Missing key len"))?;
                 let key_len = parse_ascii_len(key_part)?;
 
-                let value_part = parts.next().ok_or_else(|| anyhow!("Missing value len"))?;
+                let value_part = parts
+                    .next()
+                    .ok_or_else(|| Error::msg("Missing value len"))?;
                 let value_len = parse_ascii_len(value_part)?;
 
-                let rest = parts.next().ok_or_else(|| anyhow!("Missing data"))?;
+                let rest = parts.next().ok_or_else(|| Error::msg("Missing data"))?;
                 let rest = rest
                     .get(..key_len + value_len)
-                    .ok_or_else(|| anyhow!("Not enough data for specified data lengths"))?;
+                    .ok_or_else(|| Error::msg("Not enough data for specified data lengths"))?;
 
                 let (key, value) = rest.split_at(key_len);
-                let key = std::str::from_utf8(key).map_err(|e| anyhow!("Invalid key: {e:?}"))?;
-                let value =
-                    std::str::from_utf8(value).map_err(|e| anyhow!("Invalid value: {e:?}"))?;
+                let key =
+                    std::str::from_utf8(key).map_err(|e| Error::new(e).context("Invalid key"))?;
+                let value = std::str::from_utf8(value)
+                    .map_err(|e| Error::new(e).context("Invalid value"))?;
 
                 Ok(Self::Set(Cow::Borrowed(key), Cow::Borrowed(value)))
             }
@@ -99,7 +102,7 @@ impl<'a> Cmd<'a> {
 
 fn parse_ascii_len(len: &[u8]) -> Result<usize> {
     if len.len() >= 10 {
-        return Err(anyhow!("Too much data").into()); // ?
+        return Err(Error::msg("Too much data")); // ?
     }
     let mut l = 0;
     let mut base = 1;
