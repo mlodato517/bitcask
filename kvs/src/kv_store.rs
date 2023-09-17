@@ -3,7 +3,6 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::fs::File;
-use std::hash::Hash;
 use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
@@ -136,25 +135,6 @@ impl<C> KvStore<C> {
         }
 
         Ok(dead_data_count)
-    }
-
-    fn get<K>(&mut self, key: K) -> Result<Option<String>>
-    where
-        K: Borrow<str> + Hash + Eq,
-    {
-        match self.index.get(key.borrow()) {
-            Some(Index {
-                file_offset,
-                file_idx,
-            }) => {
-                let file = match *file_idx {
-                    ACTIVE_FILE_IDX => &self.active_file.file,
-                    idx => &self.immutable_files[idx].file,
-                };
-                file_util::seek_file_for_value(file, *file_offset)
-            }
-            None => Ok(None),
-        }
     }
 
     // TODO More atomically? How do we handle concurrent compaction requests? Should probably take
