@@ -219,7 +219,7 @@ impl<C: CompactionPolicy> KvStore<C> {
         let file_offset = f.len;
 
         // TODO Could we write directly to the file and get back out num bytes written?
-        // TODO Maybe handle carriage returns? `std::writln!` doesn't care :shrug:
+        // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
         let value = format!("{}\n", serde_json::to_string(&cmd)?);
         f.len += value.len() as u64;
         f.file.write_all(value.as_bytes())?;

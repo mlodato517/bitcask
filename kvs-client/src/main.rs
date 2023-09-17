@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     info!(?args.addr, "Connecting to server");
-    let mut server = TcpStream::connect(args.addr)?;
+    let mut connection = TcpStream::connect(args.addr)?;
     // TODO set_read_timeout?
     debug!("Connected to server");
 
@@ -38,15 +38,15 @@ fn main() -> Result<()> {
         Command::Rm { key } => Cmd::Rm(Cow::Borrowed(key)),
     };
     info!(?cmd, "Writing to server");
-    cmd.write(&mut server)?;
+    cmd.write(&mut connection)?;
     // NB We don't need to `.flush()?` because, for `TcpStream`, that's a no-op
     debug!("Wrote to server. Shutting down write half.");
-    server.shutdown(Shutdown::Write)?;
+    connection.shutdown(Shutdown::Write)?;
     debug!("Shut down write half");
 
     let mut result = Vec::with_capacity(1024);
     debug!("Reading from server");
-    match Response::read(&mut server, &mut result) {
+    match Response::read(&mut connection, &mut result) {
         Ok(Response::Ok(s)) => {
             if let Command::Get { .. } = &args.command {
                 println!("{s}")
