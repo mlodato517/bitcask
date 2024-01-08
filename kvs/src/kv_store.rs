@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
+use protocol::Cmd;
 use tracing::debug;
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
@@ -117,7 +118,7 @@ impl<C> KvStore<C> {
             let line_len = line.len();
             let trimmed = line.trim_end();
 
-            let command: Command = serde_json::from_str(trimmed)?;
+            let command: Command = Cmd::parse(trimmed.as_bytes())?.try_into()?;
             let index = Index {
                 file_idx,
                 file_offset,
@@ -171,9 +172,13 @@ impl<C> KvStore<C> {
 
             // TODO Extract with write_cmd
             let file_offset = compacted_file.len;
-            let value = format!("{}\n", serde_json::to_string(&cmd)?);
+
+            let mut value = Vec::new();
+            Cmd::from(cmd).write(&mut value)?;
+            value.push(b'\n');
+
             compacted_file.len += value.len() as u64;
-            compacted_file.file.write_all(value.as_bytes())?;
+            compacted_file.file.write_all(&value)?;
 
             *file_index = Index {
                 file_idx: 0,
@@ -200,9 +205,15 @@ impl<C: CompactionPolicy> KvStore<C> {
 
         // TODO Could we write directly to the file and get back out num bytes written?
         // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
-        let value = format!("{}\n", serde_json::to_string(&cmd)?);
+        let mut value = Vec::new();
+        let cmd = Cmd::from(cmd);
+        cmd.write(&mut value)?;
+        value.push(b'\n');
+
+        let cmd = Command::try_from(cmd).expect("Started as valid Command");
+
         f.len += value.len() as u64;
-        f.file.write_all(value.as_bytes())?;
+        f.file.write_all(&value)?;
 
         let key = match cmd {
             Command::Rm(key) => key,

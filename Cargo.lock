@@ -446,8 +446,7 @@ name = "kvs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "serde",
- "serde_json",
+ "protocol",
  "tempfile",
  "time",
  "tracing",

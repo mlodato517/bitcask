@@ -1,10 +1,32 @@
 use std::borrow::Cow;
 
-use serde::{Deserialize, Serialize};
+use protocol::Cmd;
 
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub(crate) enum Command<'a, 'b, 'c> {
-    Set(Cow<'a, str>, Cow<'b, str>),
-    Rm(Cow<'c, str>),
+use crate::Error;
+
+/// Representation of a user command that modifies data and is persisted in some way.
+pub(crate) enum Command<'a> {
+    Set(Cow<'a, str>, Cow<'a, str>),
+    Rm(Cow<'a, str>),
+}
+
+impl<'a> From<Command<'a>> for Cmd<'a> {
+    fn from(command: Command<'a>) -> Self {
+        match command {
+            Command::Set(key, val) => Self::Set(key, val),
+            Command::Rm(key) => Self::Rm(key),
+        }
+    }
+}
+
+impl<'a> TryFrom<Cmd<'a>> for Command<'a> {
+    type Error = Error;
+
+    fn try_from(command: Cmd<'a>) -> Result<Self, Self::Error> {
+        match command {
+            Cmd::Set(key, val) => Ok(Self::Set(key, val)),
+            Cmd::Rm(key) => Ok(Self::Rm(key)),
+            Cmd::Get(_) => Err(Error::msg("Gets aren't persisted")),
+        }
+    }
 }

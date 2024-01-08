@@ -5,6 +5,8 @@ use tracing::debug;
 // TODO More specific crate error
 use anyhow::{Context, Error, Result};
 
+/// Representation of a user command that interacts with the store in any way, whether that
+/// modifies data, or just queries it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd<'a> {
     Set(Cow<'a, str>, Cow<'a, str>),
@@ -14,11 +16,9 @@ pub enum Cmd<'a> {
 
 impl<'a> Cmd<'a> {
     pub fn read<R: Read>(mut reader: R, result: &'a mut Vec<u8>) -> Result<Self> {
-        result.clear();
-
         // We want to make sure we can at least read a tag, key length, and value length. So we
         // need at least 9 bytes. But `read_to_end` uses 32, so let's do that to reduce resizes.
-        if result.capacity() < 32 {
+        if result.len() < 32 {
             result.resize(32, 0);
         }
 
@@ -63,15 +63,18 @@ impl<'a> Cmd<'a> {
 
         // At this point, `result` should have enough data in it for us to read the lengths we need
         let (len, offset) = Self::read_len(result)?;
+        let len = len as usize;
 
-        // Make sure we have enough to read the whole thing.
-        if result.capacity() < len as usize + offset {
-            result.resize(len as usize + offset, 0);
+        if len + offset > total_read {
+            // Make sure we have enough to read the whole thing.
+            if result.capacity() < len + offset {
+                result.resize(len + offset, 0);
+            }
+
+            reader
+                .read_exact(&mut result[total_read..len + offset])
+                .context("Failed to read data")?;
         }
-
-        reader
-            .read_exact(&mut result[total_read..len as usize + offset])
-            .context("Failed to read data")?;
 
         Self::parse(result)
     }
