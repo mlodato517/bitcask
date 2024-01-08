@@ -2,7 +2,7 @@
 
 use std::borrow::{Borrow, Cow};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, Write};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::PathBuf;
 
 use hashbrown::HashMap;
@@ -173,12 +173,8 @@ impl<C> KvStore<C> {
             // TODO Extract with write_cmd
             let file_offset = compacted_file.len;
 
-            let mut value = Vec::new();
-            Cmd::from(cmd).write(&mut value)?;
-            value.push(b'\n');
-
-            compacted_file.len += value.len() as u64;
-            compacted_file.file.write_all(&value)?;
+            let bytes_written = Cmd::from(cmd).writeln(&mut compacted_file.file)?;
+            compacted_file.len += bytes_written as u64;
 
             *file_index = Index {
                 file_idx: 0,
@@ -203,18 +199,11 @@ impl<C: CompactionPolicy> KvStore<C> {
         let f = &mut self.active_file;
         let file_offset = f.len;
 
-        // TODO Could we write directly to the file and get back out num bytes written?
-        // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
-        let mut value = Vec::new();
         let cmd = Cmd::from(cmd);
-        cmd.write(&mut value)?;
-        value.push(b'\n');
+        let bytes_written = cmd.writeln(&mut f.file)?;
+        f.len += bytes_written as u64;
 
         let cmd = Command::try_from(cmd).expect("Started as valid Command");
-
-        f.len += value.len() as u64;
-        f.file.write_all(&value)?;
-
         let key = match cmd {
             Command::Rm(key) => key,
             Command::Set(key, _) => key,

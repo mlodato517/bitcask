@@ -141,26 +141,54 @@ impl<'a> Cmd<'a> {
         }
     }
 
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<()> {
-        // TODO Consolidate writes with buffered writer or something?
+    pub fn write<W: Write>(&self, w: &mut W) -> Result<usize> {
+        let bytes = self.to_bytes(0);
+        w.write_all(&bytes)?;
+        Ok(bytes.len())
+    }
+
+    pub fn writeln<W: Write>(&self, w: &mut W) -> Result<usize> {
+        let mut bytes = self.to_bytes(1);
+
+        // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
+        bytes.push(b'\n');
+
+        w.write_all(&bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn to_bytes(&self, padding: usize) -> Vec<u8> {
         match self {
             Self::Set(key, val) => {
-                w.write_all(&b"s"[..])?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                w.write_all(&(val.len() as u32).to_be_bytes())?;
-                Ok(write!(w, "{key}{val}")?)
+                let mut buf = Vec::with_capacity(1 + 4 + 4 + key.len() + val.len() + padding);
+
+                buf.extend(b"s");
+                buf.extend((key.len() as u32).to_be_bytes());
+                buf.extend((val.len() as u32).to_be_bytes());
+                buf.extend(key.as_bytes());
+                buf.extend(val.as_bytes());
+
+                buf
             }
             Self::Get(key) => {
-                w.write_all(&b"g"[..])?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                Ok(write!(w, "{key}")?)
+                let mut buf = Vec::with_capacity(1 + 4 + key.len() + padding);
+
+                buf.extend(b"g");
+                buf.extend((key.len() as u32).to_be_bytes());
+                buf.extend(key.as_bytes());
+
+                buf
             }
             // TODO Could model "rm" as a "set" whose value is a single null byte. Then we only
             // use the tag to identify a Get, which might save bytes overall :thinking:
             Self::Rm(key) => {
-                w.write_all(&b"r"[..])?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                Ok(write!(w, "{key}")?)
+                let mut buf = Vec::with_capacity(1 + 4 + key.len() + padding);
+
+                buf.extend(b"r");
+                buf.extend((key.len() as u32).to_be_bytes());
+                buf.extend(key.as_bytes());
+
+                buf
             }
         }
     }

@@ -24,10 +24,13 @@ fn main() {
     let dir = TempDir::new().unwrap();
     let mut kvs = KvsServer::open(Some("kvs"), dir.path()).unwrap();
 
-    for (key, value) in &key_values {
-        let cmd = Cmd::Set(key.into(), value.into());
-        if let Response::Err(e) = kvs.handle_cmd(cmd) {
-            panic!("Unexpected error: {e:?}")
+    for _ in 0..1000 {
+        for (key, value) in &key_values {
+            let cmd = Cmd::Set(key.into(), value.into());
+            match kvs.handle_cmd(cmd) {
+                Response::Ok => {}
+                _ => panic!("Failed to set value!"),
+            }
         }
     }
 
