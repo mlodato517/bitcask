@@ -12,4 +12,13 @@ kvs = { path = "../kvs" }
 logging = { path = "../logging" }
 protocol = { path = "../protocol" }
 sled = "0.34.7"
+tempfile = "3.9.0"
 tracing = "0.1.37"
+
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+rand = "0.8.5"
+
+[[bench]]
+name = "bench"
+harness = false

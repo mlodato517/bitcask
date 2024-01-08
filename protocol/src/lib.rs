@@ -32,7 +32,7 @@ impl<'a> Response<'a> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Cmd<'a> {
     Set(Cow<'a, str>, Cow<'a, str>),
     Get(Cow<'a, str>),
