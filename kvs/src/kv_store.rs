@@ -1,11 +1,11 @@
 //! A key-value store. This has an API similar to the standard library's `HashMap`.
 
 use std::borrow::{Borrow, Cow};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
+use hashbrown::HashMap;
 use protocol::Cmd;
 use tracing::debug;
 
