@@ -2,6 +2,7 @@
 name = "kvs-server"
 version = "0.1.0"
 edition = "2021"
+default-run = "main"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,13 +12,13 @@ clap = { version = "4.2.4", features = ["derive"] }
 kvs = { path = "../kvs" }
 logging = { path = "../logging" }
 protocol = { path = "../protocol" }
+rand = "0.8.5"
 sled = "0.34.7"
 tempfile = "3.9.0"
 tracing = "0.1.37"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
-rand = "0.8.5"
 
 [[bench]]
 name = "bench"

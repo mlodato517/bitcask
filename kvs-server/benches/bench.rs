@@ -70,7 +70,7 @@ fn bench_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("read");
 
     let mut rng = get_rng();
-    let sets: Vec<_> = (0..1000)
+    let sets: Vec<_> = (0..100)
         .map(|_| {
             let len = rng.gen_range(1..=100_000);
             let key = Alphanumeric.sample_string(&mut rng, len as usize);
