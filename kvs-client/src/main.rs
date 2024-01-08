@@ -3,7 +3,8 @@ use std::net::{Shutdown, TcpStream};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use protocol::{Cmd, Response};
+use kvs_server::response::Response;
+use protocol::Cmd;
 use tracing::{debug, info};
 
 #[derive(Parser)]
@@ -47,10 +48,9 @@ fn main() -> Result<()> {
     let mut result = Vec::with_capacity(1024);
     debug!("Reading from server");
     match Response::read(&mut connection, &mut result) {
-        Ok(Response::Ok(s)) => {
-            if let Command::Get { .. } = &args.command {
-                println!("{s}")
-            }
+        Ok(Response::Ok) => {}
+        Ok(Response::OkGet(val)) => {
+            println!("{val}")
         }
         Ok(Response::KeyNotFound) => match &args.command {
             Command::Get { .. } | Command::Rm { .. } => println!("Key not found"),

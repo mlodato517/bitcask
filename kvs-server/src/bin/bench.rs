@@ -1,5 +1,4 @@
-use std::hint::black_box;
-
+use kvs_server::response::Response;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::prelude::*;
 use tempfile::TempDir;
@@ -31,15 +30,16 @@ fn main() {
     let mut kvs = KvsServer::open(Some("kvs"), dir.path()).unwrap();
 
     for cmd in &sets {
-        kvs.handle_cmd(cmd.clone(), std::io::empty()).unwrap();
+        if let Response::Err(e) = kvs.handle_cmd(cmd.clone()) {
+            panic!("Unexpected error: {e:?}")
+        }
     }
 
-    let mut output = Vec::new();
     for _ in 0..1000 {
         for get in &gets {
-            kvs.handle_cmd(black_box(get.clone()), &mut output).unwrap();
-            output.clear();
-            output = black_box(output);
+            if let Response::Err(e) = kvs.handle_cmd(get.clone()) {
+                panic!("Unexpected error: {e:?}")
+            }
         }
     }
 }

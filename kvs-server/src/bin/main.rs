@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
@@ -43,12 +43,9 @@ fn main() -> Result<()> {
         let mut stream = stream?;
         info!(?stream, "Received connection");
 
-        // TODO BufReader? Read timeout? Read incrementally? Use len to read more if needed?
         let mut buf = vec![];
-        stream.read_to_end(&mut buf)?;
-        debug!(?buf, "Current buffer");
 
-        let cmd = match Cmd::parse(&buf) {
+        let cmd = match Cmd::read(&mut stream, &mut buf) {
             Ok(cmd) => cmd,
             Err(e) => {
                 warn!(?e, "Failed to parse command");
@@ -60,7 +57,8 @@ fn main() -> Result<()> {
         };
 
         info!(?cmd, "Parsed command");
-        kvs.handle_cmd(cmd, &mut stream)?;
+        let response = kvs.handle_cmd(cmd);
+        response.write(&mut stream)?;
         stream.flush()?;
     }
 

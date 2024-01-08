@@ -1,7 +1,7 @@
-use std::hint::black_box;
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, Criterion};
+use kvs_server::response::Response;
 use kvs_server::KvsServer;
 use protocol::Cmd;
 use rand::distributions::{Alphanumeric, DistString};
@@ -32,13 +32,12 @@ fn bench_writes(c: &mut Criterion) {
             let dir = TempDir::new().unwrap();
             let mut kvs = KvsServer::open(Some("kvs"), dir.path()).unwrap();
 
-            let mut output = Vec::new();
             let start = Instant::now();
             for _i in 0..iters {
                 for cmd in &cmds {
-                    kvs.handle_cmd(black_box(cmd.clone()), &mut output).unwrap();
-                    output.clear();
-                    output = black_box(output);
+                    if let Response::Err(e) = kvs.handle_cmd(cmd.clone()) {
+                        panic!("Unexpected error: {e:?}")
+                    }
                 }
             }
             start.elapsed()
@@ -50,13 +49,12 @@ fn bench_writes(c: &mut Criterion) {
             let dir = TempDir::new().unwrap();
             let mut kvs = KvsServer::open(Some("sled"), dir.path()).unwrap();
 
-            let mut output = Vec::new();
             let start = Instant::now();
             for _i in 0..iters {
                 for cmd in &cmds {
-                    kvs.handle_cmd(black_box(cmd.clone()), &mut output).unwrap();
-                    output.clear();
-                    output = black_box(output);
+                    if let Response::Err(e) = kvs.handle_cmd(cmd.clone()) {
+                        panic!("Unexpected error: {e:?}")
+                    }
                 }
             }
             start.elapsed()
@@ -94,16 +92,17 @@ fn bench_reads(c: &mut Criterion) {
             let mut kvs = KvsServer::open(Some("kvs"), dir.path()).unwrap();
 
             for cmd in &sets {
-                kvs.handle_cmd(cmd.clone(), std::io::empty()).unwrap();
+                if let Response::Err(e) = kvs.handle_cmd(cmd.clone()) {
+                    panic!("Unexpected error: {e:?}")
+                }
             }
 
-            let mut output = Vec::new();
             let start = Instant::now();
             for _i in 0..iters {
                 for get in &gets {
-                    kvs.handle_cmd(black_box(get.clone()), &mut output).unwrap();
-                    output.clear();
-                    output = black_box(output);
+                    if let Response::Err(e) = kvs.handle_cmd(get.clone()) {
+                        panic!("Unexpected error: {e:?}")
+                    }
                 }
             }
             start.elapsed()
@@ -116,16 +115,17 @@ fn bench_reads(c: &mut Criterion) {
             let mut kvs = KvsServer::open(Some("sled"), dir.path()).unwrap();
 
             for cmd in &sets {
-                kvs.handle_cmd(cmd.clone(), std::io::empty()).unwrap();
+                if let Response::Err(e) = kvs.handle_cmd(cmd.clone()) {
+                    panic!("Unexpected error: {e:?}")
+                }
             }
 
-            let mut output = Vec::new();
             let start = Instant::now();
             for _i in 0..iters {
                 for get in &gets {
-                    kvs.handle_cmd(black_box(get.clone()), &mut output).unwrap();
-                    output.clear();
-                    output = black_box(output);
+                    if let Response::Err(e) = kvs.handle_cmd(get.clone()) {
+                        panic!("Unexpected error: {e:?}")
+                    }
                 }
             }
             start.elapsed()

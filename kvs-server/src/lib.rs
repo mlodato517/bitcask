@@ -1,15 +1,16 @@
 use std::borrow::Borrow;
 use std::fmt;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::{bail, Result};
 use kvs::{KvStore, KvsEngine};
 use protocol::Cmd;
+use response::Response;
 use tracing::warn;
 
 use crate::sled_engine::SledDb;
 
+pub mod response;
 mod sled_engine;
 
 pub struct KvsServer {
@@ -51,33 +52,28 @@ impl KvsServer {
         Ok(Self { engine })
     }
 
-    pub fn handle_cmd(&mut self, cmd: Cmd, mut out: impl Write) -> Result<()> {
+    pub fn handle_cmd(&mut self, cmd: Cmd) -> Response {
         match cmd {
             Cmd::Set(k, v) => match self.engine.set(k.to_string(), &v) {
-                Ok(_) => {
-                    out.write_all(b"s")?;
-                }
+                Ok(_) => Response::Ok,
                 Err(e) => {
                     warn!(?e, "Failed to set key to value");
-                    write!(out, "e{e}")?;
+                    Response::Err(e)
                 }
             },
             Cmd::Get(k) => match self.engine.get(k) {
-                Ok(Some(val)) => write!(out, "s{val}")?,
-                Ok(None) => out.write_all(b"n")?,
-                Err(e) => write!(out, "e{e}")?,
+                Ok(Some(val)) => Response::OkGet(val),
+                Ok(None) => Response::KeyNotFound,
+                Err(e) => Response::Err(e),
             },
             Cmd::Rm(k) => match self.engine.remove(k) {
-                Ok(()) => {
-                    out.write_all(b"s")?;
-                }
+                Ok(()) => Response::Ok,
                 Err(e) => {
                     warn!(?e, "Failed to remove key");
-                    write!(out, "e{e}")?;
+                    Response::Err(e)
                 }
             },
         }
-        Ok(())
     }
 }
 
