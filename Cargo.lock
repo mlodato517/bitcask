@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hashbrown",
+ "memmap2",
  "protocol",
  "tempfile",
  "time",
@@ -572,6 +573,15 @@ name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
+
+[[package]]
+name = "memmap2"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"

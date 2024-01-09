@@ -29,7 +29,7 @@ fn main() {
             let cmd = Cmd::Set(key.into(), value.into());
             match kvs.handle_cmd(cmd) {
                 Response::Ok => {}
-                _ => panic!("Failed to set value!"),
+                response => panic!("Failed to set value! {response:?}"),
             }
         }
     }

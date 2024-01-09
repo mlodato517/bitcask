@@ -137,48 +137,60 @@ impl<'a> Cmd<'a> {
 
                 Ok(Self::Set(Cow::Borrowed(key), Cow::Borrowed(val)))
             }
-            _ => Err(Error::msg("Invalid command tag")),
+            _ => Err(Error::msg("Invalid command tag").context("parse")),
         }
     }
 
     /// Writes the current `Cmd` into the passed writer, returning the bytes read.
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<usize> {
+    pub fn write<W: Write>(&self, mut w: W) -> Result<usize> {
         match self {
             Self::Set(key, val) => {
-                w.write_all(b"s")?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                w.write_all(&(val.len() as u32).to_be_bytes())?;
-                w.write_all(key.as_bytes())?;
-                w.write_all(val.as_bytes())?;
+                w.write_all(b"s")
+                    .and_then(|_| w.write_all(&(key.len() as u32).to_be_bytes()))
+                    .and_then(|_| w.write_all(&(val.len() as u32).to_be_bytes()))
+                    .and_then(|_| w.write_all(key.as_bytes()))
+                    .and_then(|_| w.write_all(val.as_bytes()))
+                    .context("writing set cmd")?;
 
                 Ok(1 + 4 + 4 + key.len() + val.len())
             }
             Self::Get(key) => {
-                w.write_all(b"g")?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                w.write_all(key.as_bytes())?;
+                w.write_all(b"g")
+                    .and_then(|_| w.write_all(&(key.len() as u32).to_be_bytes()))
+                    .and_then(|_| w.write_all(key.as_bytes()))
+                    .context("writing get cmd")?;
 
                 Ok(1 + 4 + key.len())
             }
             // TODO Could model "rm" as a "set" whose value is a single null byte. Then we only
             // use the tag to identify a Get, which might save bytes overall :thinking:
             Self::Rm(key) => {
-                w.write_all(b"r")?;
-                w.write_all(&(key.len() as u32).to_be_bytes())?;
-                w.write_all(key.as_bytes())?;
+                w.write_all(b"r")
+                    .and_then(|_| w.write_all(&(key.len() as u32).to_be_bytes()))
+                    .and_then(|_| w.write_all(key.as_bytes()))
+                    .context("writing rm cmd")?;
 
                 Ok(1 + 4 + key.len())
             }
         }
     }
 
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Set(key, val) => 1 + 4 + 4 + key.len() + val.len(),
+            Self::Get(key) => 1 + 4 + key.len(),
+            Self::Rm(key) => 1 + 4 + key.len(),
+        }
+    }
+
     /// Writes the current `Cmd` into the passed writer, with a trailing newline, returning the
     /// bytes read.
-    pub fn writeln<W: Write>(&self, w: &mut W) -> Result<usize> {
-        let data_len = self.write(w)?;
+    pub fn writeln<W: Write>(&self, mut w: W) -> Result<usize> {
+        let data_len = self.write(&mut w)?;
 
         // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
-        w.write_all(b"\n")?;
+        w.write_all(b"\n").context("adding newline")?;
 
         Ok(data_len + 1)
     }
@@ -207,7 +219,7 @@ impl<'a> Cmd<'a> {
                 // Read key and value, skipping the tag and the key_len and val_len prefixes
                 Ok((key_len + val_len, 9))
             }
-            _ => Err(Error::msg("Invalid command tag")),
+            _ => Err(Error::msg("Invalid command tag").context("read_len")),
         }
     }
 }
