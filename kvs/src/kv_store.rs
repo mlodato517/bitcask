@@ -2,7 +2,7 @@
 
 use std::borrow::{Borrow, Cow};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 
 use hashbrown::HashMap;
@@ -14,6 +14,9 @@ use crate::engine::KvsEngine;
 use crate::file_util;
 use crate::Command;
 use crate::{Error, Result};
+use active_file::ActiveFile;
+
+mod active_file;
 
 // TODO Need to find a balance between:
 //     1. Not opening too many files (i.e. larger files)
@@ -24,7 +27,7 @@ const ACTIVE_FILE_IDX: usize = usize::MAX;
 /// A key-value store to associate values with keys. Key-value pairs can be inserted, looked up,
 /// and removed.
 pub struct KvStore<C = MaxFilePolicy> {
-    active_file: LogFile,
+    active_file: ActiveFile,
     compaction_policy: C,
     dead_data_count: usize,
     dir: PathBuf,
@@ -70,7 +73,7 @@ impl<C> KvStore<C> {
         let active_file = paths
             .pop()
             .unwrap_or_else(|| dir_path.join(file_util::file_name()));
-        let active_file = LogFile::new(active_file)?;
+        let active_file = ActiveFile::new(active_file)?;
 
         let immutable_files = paths
             .into_iter()
@@ -97,20 +100,24 @@ impl<C> KvStore<C> {
         for (file_idx, f) in self.immutable_files.iter_mut().enumerate() {
             // Count up the size of dead records in immutable files. When there are "enough", we
             // can compact all the immutable files into a single file.
-            self.dead_data_count += Self::hydrate_file(&mut self.index, &mut f.file, file_idx)?;
+            self.dead_data_count +=
+                Self::hydrate_from_reader(&mut self.index, &mut f.file, file_idx)?;
         }
-        Self::hydrate_file(&mut self.index, &mut self.active_file.file, ACTIVE_FILE_IDX)?;
+        Self::hydrate_from_reader(
+            &mut self.index,
+            self.active_file.as_reader(),
+            ACTIVE_FILE_IDX,
+        )?;
         Ok(())
     }
 
-    fn hydrate_file(
+    fn hydrate_from_reader(
         in_memory_index: &mut HashMap<String, Index>,
-        file: &mut File,
+        reader: impl Read,
         file_idx: usize,
     ) -> Result<usize> {
         let mut dead_data_count = 0;
-        file.rewind()?;
-        let mut f = BufReader::new(file);
+        let mut f = BufReader::new(reader);
 
         let mut line = String::new();
         let mut file_offset = 0;
@@ -196,14 +203,8 @@ impl<C> KvStore<C> {
 impl<C: CompactionPolicy> KvStore<C> {
     /// Appends the command to the end of the file with a trailing newline
     fn write_cmd(&mut self, cmd: Command) -> Result<()> {
-        let f = &mut self.active_file;
-        let file_offset = f.len;
+        let file_offset = self.active_file.write(cmd.clone())?;
 
-        let cmd = Cmd::from(cmd);
-        let bytes_written = cmd.writeln(&mut f.file)?;
-        f.len += bytes_written as u64;
-
-        let cmd = Command::try_from(cmd).expect("Started as valid Command");
         let key = match cmd {
             Command::Rm(key) => key,
             Command::Set(key, _) => key,
@@ -223,12 +224,13 @@ impl<C: CompactionPolicy> KvStore<C> {
         // TODO Configure?
         if file_offset > FILE_SIZE_LIMIT {
             let next_file = self.dir.join(file_util::file_name());
-            let file = LogFile::new(next_file)?;
+            let file = ActiveFile::new(next_file)?;
             let old_file = std::mem::replace(&mut self.active_file, file);
-            self.immutable_files.push(old_file);
+            self.immutable_files.push(old_file.into());
 
             // Any indexed values for the active file now get moved to reference the immutable file
             // list.
+            // TODO Consider stable indices
             for file_index in self.index.values_mut() {
                 if file_index.file_idx == ACTIVE_FILE_IDX {
                     file_index.file_idx = self.immutable_files.len() - 1;
@@ -256,13 +258,13 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
             Some(Index {
                 file_offset,
                 file_idx,
-            }) => {
-                let file = match *file_idx {
-                    ACTIVE_FILE_IDX => &self.active_file.file,
-                    idx => &self.immutable_files[idx].file,
-                };
-                file_util::seek_file_for_value(file, *file_offset)
-            }
+            }) => match *file_idx {
+                ACTIVE_FILE_IDX => self.active_file.read_at(*file_offset),
+                idx => {
+                    let file = &self.immutable_files[idx].file;
+                    file_util::seek_file_for_value(file, *file_offset)
+                }
+            },
             None => Ok(None),
         }
     }

@@ -5,6 +5,7 @@ use protocol::Cmd;
 use crate::Error;
 
 /// Representation of a user command that modifies data and is persisted in some way.
+#[derive(Clone)] // TODO Do we need this?
 pub(crate) enum Command<'a> {
     Set(Cow<'a, str>, Cow<'a, str>),
     Rm(Cow<'a, str>),
