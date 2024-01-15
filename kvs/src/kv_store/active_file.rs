@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufWriter, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -11,7 +11,7 @@ use super::LogFile;
 
 pub(crate) struct ActiveFile {
     path: PathBuf,
-    file: File,
+    file: BufWriter<File>,
     len: u64,
 }
 impl ActiveFile {
@@ -22,12 +22,13 @@ impl ActiveFile {
             .append(true)
             .open(&path)?;
         let len = file.metadata()?.len();
+        let file = BufWriter::new(file);
         Ok(Self { path, file, len })
     }
 
     pub(crate) fn as_reader(&self) -> impl Read + '_ {
         // TODO Rewind first?
-        &self.file
+        self.file.get_ref()
     }
 
     pub(crate) fn read_at(&mut self, offset: u64) -> Result<Option<String>> {
@@ -35,7 +36,7 @@ impl ActiveFile {
         self.file.seek(SeekFrom::Start(offset))?;
 
         let mut buf = vec![0; 32];
-        let cmd = Cmd::read(&self.file, &mut buf)?;
+        let cmd = Cmd::read(self.file.get_ref(), &mut buf)?;
         match Command::try_from(cmd)? {
             Command::Set(_, value) => Ok(Some(value.into_owned())),
             Command::Rm(_) => Ok(None),
@@ -51,14 +52,12 @@ impl ActiveFile {
 
         Ok(file_offset)
     }
-}
 
-impl From<ActiveFile> for LogFile {
-    fn from(active_file: ActiveFile) -> Self {
-        Self {
-            path: active_file.path,
-            file: active_file.file,
-            len: active_file.len,
-        }
+    pub(crate) fn into_log_file(self) -> Result<LogFile> {
+        Ok(LogFile {
+            path: self.path,
+            file: self.file.into_inner()?,
+            len: self.len,
+        })
     }
 }

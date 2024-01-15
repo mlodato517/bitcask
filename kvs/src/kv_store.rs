@@ -226,7 +226,7 @@ impl<C: CompactionPolicy> KvStore<C> {
             let next_file = self.dir.join(file_util::file_name());
             let file = ActiveFile::new(next_file)?;
             let old_file = std::mem::replace(&mut self.active_file, file);
-            self.immutable_files.push(old_file.into());
+            self.immutable_files.push(old_file.into_log_file()?);
 
             // Any indexed values for the active file now get moved to reference the immutable file
             // list.
