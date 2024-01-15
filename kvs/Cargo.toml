@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.71"
 hashbrown = "0.14.3"
-memmap2 = "0.9.3"
 protocol = { path = "../protocol" }
 time = { version = "0.3.20", features = ["formatting"] }
 tracing = "0.1.37"

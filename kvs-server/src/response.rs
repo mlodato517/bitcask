@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 
 use anyhow::{Error, Result};
 
-#[derive(Debug)]
 pub enum Response {
     Ok,
     OkGet(String),

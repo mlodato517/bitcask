@@ -223,15 +223,10 @@ impl<C: CompactionPolicy> KvStore<C> {
 
         // TODO Configure?
         if file_offset > FILE_SIZE_LIMIT {
-            let current_active_path = self.active_file.path().to_path_buf();
             let next_file = self.dir.join(file_util::file_name());
             let file = ActiveFile::new(next_file)?;
-            let _ = std::mem::replace(&mut self.active_file, file);
-
-            // Probably could be optimized to avoid re-opening the file, but we'd need to
-            // coordinate flushing the memory map.
-            self.immutable_files
-                .push(LogFile::new(current_active_path)?);
+            let old_file = std::mem::replace(&mut self.active_file, file);
+            self.immutable_files.push(old_file.into());
 
             // Any indexed values for the active file now get moved to reference the immutable file
             // list.
