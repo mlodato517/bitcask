@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use kvs::{KvStore, KvsEngine};
+use kvs::{CompactionPolicy, KvStore, KvsEngine, MaxFilePolicy};
 use protocol::Cmd;
 use response::Response;
 use tracing::warn;
@@ -13,11 +13,20 @@ use crate::sled_engine::SledDb;
 pub mod response;
 mod sled_engine;
 
-pub struct KvsServer {
-    engine: Engine,
+pub struct KvsServer<C> {
+    engine: Engine<C>,
 }
-impl KvsServer {
+impl KvsServer<MaxFilePolicy> {
     pub fn open(engine: Option<&str>, p: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_policy(engine, p, MaxFilePolicy::default())
+    }
+}
+impl<C: CompactionPolicy> KvsServer<C> {
+    pub fn open_with_policy(
+        engine: Option<&str>,
+        p: impl AsRef<Path>,
+        compaction_policy: C,
+    ) -> Result<Self> {
         enum PreviousEngine {
             Kvs,
             None,
@@ -37,7 +46,9 @@ impl KvsServer {
         }
         let engine = match (prev_engine, engine) {
             (PreviousEngine::Sled, Some("kvs")) => bail!("Can't open kvs engine in sled directory"),
-            (_, Some("kvs")) => Engine::Kvs(KvStore::open(p.as_ref())?),
+            (_, Some("kvs")) => {
+                Engine::Kvs(KvStore::open_with_policy(p.as_ref(), compaction_policy)?)
+            }
 
             (PreviousEngine::Kvs, Some("sled")) => bail!("Can't open sled engine in kvs directory"),
             (_, Some("sled")) => Engine::Sled(SledDb(sled::open(p)?)),
@@ -46,7 +57,7 @@ impl KvsServer {
 
             (PreviousEngine::Sled, None) => Engine::Sled(SledDb(sled::open(p.as_ref())?)),
             (PreviousEngine::Kvs | PreviousEngine::None, None) => {
-                Engine::Kvs(KvStore::open(p.as_ref())?)
+                Engine::Kvs(KvStore::open_with_policy(p.as_ref(), compaction_policy)?)
             }
         };
         Ok(Self { engine })
@@ -77,7 +88,7 @@ impl KvsServer {
     }
 }
 
-impl fmt::Display for KvsServer {
+impl<C> fmt::Display for KvsServer<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.engine {
             Engine::Kvs(_) => f.write_str("kvs"),
@@ -86,11 +97,11 @@ impl fmt::Display for KvsServer {
     }
 }
 
-enum Engine {
-    Kvs(KvStore),
+enum Engine<C> {
+    Kvs(KvStore<C>),
     Sled(sled_engine::SledDb),
 }
-impl KvsEngine for Engine {
+impl<C: CompactionPolicy> KvsEngine for Engine<C> {
     fn set<V: AsRef<str>>(&mut self, key: String, value: V) -> kvs::Result<()> {
         match self {
             Self::Kvs(k) => k.set(key, value),

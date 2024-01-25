@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, Criterion};
+use kvs::NeverPolicy;
 use kvs_server::response::Response;
 use kvs_server::KvsServer;
 use protocol::Cmd;
@@ -30,7 +31,8 @@ fn bench_writes(c: &mut Criterion) {
         b.iter_custom(|iters| {
             // Must declare dir in here, otherwise `TempDir` will go out of scope and be deleted.
             let dir = TempDir::new().unwrap();
-            let mut kvs = KvsServer::open(Some("kvs"), dir.path()).unwrap();
+            let mut kvs =
+                KvsServer::open_with_policy(Some("kvs"), dir.path(), NeverPolicy).unwrap();
 
             let start = Instant::now();
             for _i in 0..iters {

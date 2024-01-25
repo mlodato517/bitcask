@@ -11,6 +11,9 @@ mod file_util;
 mod kv_store;
 
 pub(crate) use command::Command;
+pub use compaction_policy::{
+    CompactionContext, CompactionPolicy, MaxDeadRecordPolicy, MaxFilePolicy, NeverPolicy,
+};
 pub use engine::KvsEngine;
 pub use error::{Error, Result};
 pub use kv_store::KvStore;
