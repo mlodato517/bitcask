@@ -33,7 +33,7 @@ impl<'a> Cmd<'a> {
         let val_len = u64::from_be_bytes(val_len.try_into().expect("sliced 4..12"));
 
         let payload_len = match val_len {
-            GET_LEN | RM_LEN => key_len,
+            GET_LEN | RM_LEN => key_len as usize,
             val_len => key_len as usize + val_len as usize,
         };
 
