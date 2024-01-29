@@ -119,13 +119,12 @@ impl<C> KvStore<C> {
         let mut dead_data_count = 0;
         let mut f = BufReader::new(reader);
 
-        let mut line = String::new();
+        let mut line = Vec::new();
         let mut file_offset = 0;
-        while f.read_line(&mut line)? > 0 {
+        while f.read_until(b'\n', &mut line)? > 0 {
             let line_len = line.len();
-            let trimmed = line.trim_end();
 
-            let command: Command = Cmd::parse(trimmed.as_bytes())?.try_into()?;
+            let command: Command = Cmd::parse(&line)?.try_into()?;
             let index = Index {
                 file_idx,
                 file_offset,
