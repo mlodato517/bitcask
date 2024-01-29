@@ -205,19 +205,25 @@ impl<C: CompactionPolicy> KvStore<C> {
     fn write_cmd(&mut self, cmd: Command) -> Result<()> {
         let file_offset = self.active_file.write(&cmd)?;
 
-        let key = match cmd {
-            Command::Rm(key) => key.into_owned(),
-            Command::Set(key, _) => key.into_owned(),
-        };
-
-        let index = Index {
-            file_offset,
-            file_idx: ACTIVE_FILE_IDX,
-        };
-
-        if let Some(previous_value) = self.index.insert(key, index) {
-            if previous_value.file_idx != ACTIVE_FILE_IDX {
-                self.dead_data_count += 1;
+        match cmd {
+            Command::Rm(key) => {
+                if let Some(previous_value) = self.index.remove(&*key) {
+                    if previous_value.file_idx != ACTIVE_FILE_IDX {
+                        self.dead_data_count += 1;
+                    }
+                }
+            }
+            Command::Set(key, _) => {
+                let key = key.into_owned();
+                let index = Index {
+                    file_offset,
+                    file_idx: ACTIVE_FILE_IDX,
+                };
+                if let Some(previous_value) = self.index.insert(key, index) {
+                    if previous_value.file_idx != ACTIVE_FILE_IDX {
+                        self.dead_data_count += 1;
+                    }
+                }
             }
         }
 
