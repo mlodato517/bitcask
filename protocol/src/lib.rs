@@ -94,6 +94,8 @@ impl<'a> Cmd<'a> {
 
     /// Writes the current `Cmd` into the passed writer, returning the bytes read.
     pub fn write<W: Write>(&self, w: &mut W) -> Result<usize> {
+        // TODO Might want to make sure these are a single write call
+        // https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.append
         match self {
             Self::Set(key, val) => {
                 let key_len = (key.len() as u32).to_be_bytes();
@@ -122,8 +124,6 @@ impl<'a> Cmd<'a> {
 
                 Ok(header.len() + key.len())
             }
-            // TODO Could model "rm" as a "set" whose value is a single null byte. Then we only
-            // use the tag to identify a Get, which might save bytes overall :thinking:
             Self::Rm(key) => {
                 let key_len = (key.len() as u32).to_be_bytes();
                 let val_len = RM_LEN.to_be_bytes();
