@@ -501,6 +501,7 @@ dependencies = [
  "anyhow",
  "clap",
  "criterion",
+ "hashbrown",
  "kvs",
  "logging",
  "protocol",
