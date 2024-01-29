@@ -11,7 +11,7 @@ const RM_LEN: u64 = u64::MAX - 1;
 
 /// Representation of a user command that interacts with the store in any way, whether that
 /// modifies data, or just queries it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Cmd<'a> {
     Set(Cow<'a, str>, Cow<'a, str>),
     Get(Cow<'a, str>),

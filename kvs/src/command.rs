@@ -11,11 +11,11 @@ pub(crate) enum Command<'a> {
     Rm(Cow<'a, str>),
 }
 
-impl<'a> From<Command<'a>> for Cmd<'a> {
-    fn from(command: Command<'a>) -> Self {
-        match command {
-            Command::Set(key, val) => Self::Set(key, val),
-            Command::Rm(key) => Self::Rm(key),
+impl Command<'_> {
+    pub fn as_cmd(&self) -> Cmd {
+        match self {
+            Command::Set(key, val) => Cmd::Set(Cow::Borrowed(key), Cow::Borrowed(val)),
+            Command::Rm(key) => Cmd::Rm(Cow::Borrowed(key)),
         }
     }
 }

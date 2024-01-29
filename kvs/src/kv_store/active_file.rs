@@ -43,11 +43,10 @@ impl ActiveFile {
         }
     }
 
-    pub(crate) fn write(&mut self, cmd: Command) -> Result<u64> {
+    pub(crate) fn write(&mut self, cmd: &Command) -> Result<u64> {
         let file_offset = self.len;
 
-        let cmd = Cmd::from(cmd);
-        let bytes_written = cmd.writeln(&mut self.file)?;
+        let bytes_written = cmd.as_cmd().writeln(&mut self.file)?;
         self.len += bytes_written as u64;
 
         Ok(file_offset)

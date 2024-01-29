@@ -180,7 +180,7 @@ impl<C> KvStore<C> {
             // TODO Extract with write_cmd
             let file_offset = compacted_file.len;
 
-            let bytes_written = Cmd::from(cmd).writeln(&mut compacted_file.file)?;
+            let bytes_written = cmd.as_cmd().writeln(&mut compacted_file.file)?;
             compacted_file.len += bytes_written as u64;
 
             *file_index = Index {
@@ -203,11 +203,11 @@ impl<C> KvStore<C> {
 impl<C: CompactionPolicy> KvStore<C> {
     /// Appends the command to the end of the file with a trailing newline
     fn write_cmd(&mut self, cmd: Command) -> Result<()> {
-        let file_offset = self.active_file.write(cmd.clone())?;
+        let file_offset = self.active_file.write(&cmd)?;
 
         let key = match cmd {
-            Command::Rm(key) => key,
-            Command::Set(key, _) => key,
+            Command::Rm(key) => key.into_owned(),
+            Command::Set(key, _) => key.into_owned(),
         };
 
         let index = Index {
@@ -215,7 +215,7 @@ impl<C: CompactionPolicy> KvStore<C> {
             file_idx: ACTIVE_FILE_IDX,
         };
 
-        if let Some(previous_value) = self.index.insert(key.into_owned(), index) {
+        if let Some(previous_value) = self.index.insert(key, index) {
             if previous_value.file_idx != ACTIVE_FILE_IDX {
                 self.dead_data_count += 1;
             }
