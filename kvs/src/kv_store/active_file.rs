@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -47,6 +47,7 @@ impl ActiveFile {
         let file_offset = self.len;
 
         let bytes_written = cmd.as_cmd().writeln(&mut self.file)?;
+        self.file.flush()?;
         self.len += bytes_written as u64;
 
         Ok(file_offset)
