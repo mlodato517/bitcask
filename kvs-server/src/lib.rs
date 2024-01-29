@@ -65,7 +65,7 @@ impl<C: CompactionPolicy> KvsServer<C> {
 
     pub fn handle_cmd(&mut self, cmd: Cmd) -> Response {
         match cmd {
-            Cmd::Set(k, v) => match self.engine.set(k.to_string(), &v) {
+            Cmd::Set(k, v) => match self.engine.set(k.into_owned(), &v) {
                 Ok(_) => Response::Ok,
                 Err(e) => {
                     warn!(?e, "Failed to set key to value");
