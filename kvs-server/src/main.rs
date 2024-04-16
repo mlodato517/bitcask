@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use kvs::{KvStore, KvsEngine};
-use protocol::Cmd;
+use protocol::{Cmd, Response};
 use tracing::{debug, info, warn};
 
 use sled_engine::SledDb;
@@ -68,35 +68,53 @@ fn main() -> Result<()> {
         };
 
         info!(?cmd, "Parsed command");
-        match cmd {
-            Cmd::Set(k, v) => match kvs.set(k.to_string(), &v) {
-                Ok(_) => {
-                    stream.write_all(b"s")?;
-                }
-                Err(e) => {
-                    warn!(?e, "Failed to set key to value");
-                    write!(stream, "e{e}")?;
-                }
-            },
-            Cmd::Get(k) => match kvs.get(k) {
-                Ok(Some(val)) => write!(stream, "s{val}")?,
-                Ok(None) => stream.write_all(b"n")?,
-                Err(e) => write!(stream, "e{e}")?,
-            },
-            Cmd::Rm(k) => match kvs.remove(k) {
-                Ok(()) => {
-                    stream.write_all(b"s")?;
-                }
-                Err(e) => {
-                    warn!(?e, "Failed to remove key");
-                    write!(stream, "e{e}")?;
-                }
-            },
-        }
+        let response = match cmd {
+            Cmd::Set(k, v) => handle_set(&mut kvs, k.to_string(), &v),
+            Cmd::Get(k) => handle_get(&mut kvs, &k),
+            Cmd::Rm(k) => handle_rm(&mut kvs, &k),
+        };
+        response.write(&mut stream)?;
         stream.flush()?;
     }
 
     Ok(())
+}
+
+/// Executes a set command on the passed KvsEngine, returning a response.
+fn handle_set(kvs: &mut impl KvsEngine, key: String, value: &str) -> Response<'static> {
+    match kvs.set(key, value) {
+        Ok(_) => Response::SuccessfulSet,
+        Err(e) => {
+            warn!(?e, "Failed to set key to value");
+            // TODO These .to_string()s are kind of sad. We should be able to write these
+            // bytes directly into the stream. Maybe these should be static methods like
+            // `response::write_err(impl Display)` or something?
+            Response::Err(e.to_string().into())
+        }
+    }
+}
+
+/// Executes a get command on the passed KvsEngine, returning a response.
+fn handle_get(kvs: &mut impl KvsEngine, key: &str) -> Response<'static> {
+    match kvs.get(key) {
+        Ok(Some(val)) => Response::SuccessfulGet(val.into()),
+        Ok(None) => Response::KeyNotFound,
+        Err(e) => {
+            warn!(?e, "Failed to get key");
+            Response::Err(e.to_string().into())
+        }
+    }
+}
+
+/// Executes a remove command on the passed KvsEngine, returning a response.
+fn handle_rm(kvs: &mut impl KvsEngine, key: &str) -> Response<'static> {
+    match kvs.remove(key) {
+        Ok(_) => Response::SuccessfulRm,
+        Err(e) => {
+            warn!(?e, "Failed to remove key");
+            Response::Err(e.to_string().into())
+        }
+    }
 }
 
 enum Engine {

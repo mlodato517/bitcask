@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io::Read;
 use std::net::{Shutdown, TcpStream};
 
 use anyhow::Result;
@@ -46,25 +47,17 @@ fn main() -> Result<()> {
 
     let mut result = Vec::with_capacity(1024);
     debug!("Reading from server");
-    match Response::read(&mut connection, &mut result) {
-        Ok(Response::Ok(s)) => {
-            if let Command::Get { .. } = &args.command {
-                println!("{s}")
-            }
-        }
-        Ok(Response::KeyNotFound) => match &args.command {
-            Command::Get { .. } | Command::Rm { .. } => println!("Key not found"),
-            Command::Set { .. } => {
-                eprintln!("Unexpected server response of 'Key not found' to 'Set' command");
-                std::process::exit(1);
-            }
-        },
-        Ok(Response::Err(e)) => {
+    if let Err(e) = connection.read_to_end(&mut result) {
+        eprintln!("Server error: {e}");
+        std::process::exit(1);
+    }
+
+    match Response::from_bytes(&result) {
+        Response::SuccessfulSet | Response::SuccessfulRm => {}
+        Response::SuccessfulGet(s) => println!("{s}"),
+        Response::KeyNotFound => println!("Key not found"),
+        Response::Err(e) => {
             eprintln!("User error: {e}");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Server error: {e}");
             std::process::exit(1);
         }
     }
