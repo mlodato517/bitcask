@@ -7,6 +7,10 @@ use tracing::debug;
 // TODO More specific crate error
 use anyhow::{Error, Result};
 
+pub use reader::Reader;
+
+mod reader;
+
 /// Enumeration of actions that can be performed.
 //
 // Implementation details:
@@ -45,33 +49,12 @@ impl<'a> Cmd<'a> {
         }
 
         let (header, rest) = cmd.split_at(HEADER_BYTES);
-        let (key_len, value_len) = header.split_at(HEADER_KEY_BYTES);
-
-        let key_len = u32::from_be_bytes(key_len.try_into().expect("specified 4 bytes"));
-        let value_len = u64::from_be_bytes(value_len.try_into().expect("specified 8 bytes"));
+        let (key_len, value_len) =
+            Self::parse_header(header.try_into().expect("specified 12 bytes"));
 
         debug!(?key_len, ?value_len, "Header lengths");
 
-        if rest.len() < key_len as usize {
-            return Err(Error::msg("Insufficient data for key"));
-        }
-
-        let (key_bytes, value_bytes) = rest.split_at(key_len as usize);
-        let key =
-            std::str::from_utf8(key_bytes).map_err(|e| Error::new(e).context("Non-UTF8 key"))?;
-
-        match value_len {
-            GET_VALUE_LEN => Ok(Self::Get(key.into())),
-            RM_VALUE_LEN => Ok(Self::Rm(key.into())),
-            value_len => {
-                let value_bytes = value_bytes
-                    .get(..value_len as usize)
-                    .ok_or_else(|| Error::msg("Insufficient data for value"))?;
-                let value = std::str::from_utf8(value_bytes)
-                    .map_err(|e| Error::new(e).context("Non-UTF8 value"))?;
-                Ok(Self::Set(key.into(), value.into()))
-            }
-        }
+        Self::parse_body(key_len, value_len, rest)
     }
 
     /// Writes the `Cmd` into the provided writer.
@@ -96,6 +79,40 @@ impl<'a> Cmd<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Parses the passed bytes into key and value lengths.
+    pub(crate) fn parse_header(header: [u8; HEADER_BYTES]) -> (u32, u64) {
+        let (key_len, value_len) = header.split_at(HEADER_KEY_BYTES);
+
+        let key_len = u32::from_be_bytes(key_len.try_into().expect("specified 4 bytes"));
+        let value_len = u64::from_be_bytes(value_len.try_into().expect("specified 8 bytes"));
+
+        (key_len, value_len)
+    }
+
+    /// Parses the passed bytes into a command, using the provided key and value lengths.
+    pub(crate) fn parse_body(key_len: u32, value_len: u64, bytes: &'a [u8]) -> Result<Self> {
+        if bytes.len() < key_len as usize {
+            return Err(Error::msg("Insufficient data for key"));
+        }
+
+        let (key_bytes, value_bytes) = bytes.split_at(key_len as usize);
+        let key =
+            std::str::from_utf8(key_bytes).map_err(|e| Error::new(e).context("Non-UTF8 key"))?;
+
+        match value_len {
+            GET_VALUE_LEN => Ok(Self::Get(key.into())),
+            RM_VALUE_LEN => Ok(Self::Rm(key.into())),
+            value_len => {
+                let value_bytes = value_bytes
+                    .get(..value_len as usize)
+                    .ok_or_else(|| Error::msg("Insufficient data for value"))?;
+                let value = std::str::from_utf8(value_bytes)
+                    .map_err(|e| Error::new(e).context("Non-UTF8 value"))?;
+                Ok(Self::Set(key.into(), value.into()))
+            }
+        }
     }
 }
 
