@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::io::Write;
 
-use tracing::debug;
 // TODO More specific crate error
 use anyhow::{Error, Result};
 
@@ -40,25 +39,8 @@ const GET_VALUE_LEN: u64 = u64::MAX;
 const RM_VALUE_LEN: u64 = GET_VALUE_LEN - 1;
 
 impl<'a> Cmd<'a> {
-    /// Parses a `Cmd` out of the provided byte buffer.
-    pub fn parse(cmd: &'a [u8]) -> Result<Self> {
-        debug!(?cmd, "Received command");
-
-        if cmd.len() < HEADER_BYTES {
-            return Err(Error::msg("Missing proper header"));
-        }
-
-        let (header, rest) = cmd.split_at(HEADER_BYTES);
-        let (key_len, value_len) =
-            Self::parse_header(header.try_into().expect("specified 12 bytes"));
-
-        debug!(?key_len, ?value_len, "Header lengths");
-
-        Self::parse_body(key_len, value_len, rest)
-    }
-
-    /// Writes the `Cmd` into the provided writer.
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<()> {
+    /// Writes the `Cmd` into the provided writer and returns the number of bytes written.
+    pub fn write<W: Write>(&self, mut w: W) -> Result<usize> {
         match self {
             Self::Set(key, value) => {
                 // TODO is the any value in buffering these?
@@ -66,19 +48,21 @@ impl<'a> Cmd<'a> {
                 w.write_all(&(value.len() as u64).to_be_bytes())?;
                 w.write_all(key.as_bytes())?;
                 w.write_all(value.as_bytes())?;
+                Ok(HEADER_BYTES + key.len() + value.len())
             }
             Self::Get(key) => {
                 w.write_all(&(key.len() as u32).to_be_bytes())?;
                 w.write_all(&GET_VALUE_LEN.to_be_bytes())?;
                 w.write_all(key.as_bytes())?;
+                Ok(HEADER_BYTES + key.len())
             }
             Self::Rm(key) => {
                 w.write_all(&(key.len() as u32).to_be_bytes())?;
                 w.write_all(&RM_VALUE_LEN.to_be_bytes())?;
                 w.write_all(key.as_bytes())?;
+                Ok(HEADER_BYTES + key.len())
             }
         }
-        Ok(())
     }
 
     /// Parses the passed bytes into key and value lengths.
@@ -120,6 +104,19 @@ impl<'a> Cmd<'a> {
 mod tests {
     use super::*;
 
+    // Helper for tests
+    fn parse(cmd: &[u8]) -> Result<Cmd> {
+        if cmd.len() < HEADER_BYTES {
+            return Err(Error::msg("Missing proper header"));
+        }
+
+        let (header, rest) = cmd.split_at(HEADER_BYTES);
+        let (key_len, value_len) =
+            Cmd::parse_header(header.try_into().expect("specified 12 bytes"));
+
+        Cmd::parse_body(key_len, value_len, rest)
+    }
+
     #[test]
     fn set() {
         let mut bytes = Vec::new();
@@ -127,7 +124,7 @@ mod tests {
         bytes.extend(6u64.to_be_bytes());
         bytes.extend(b"foofoobar");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Set("foo".into(), "foobar".into());
         assert_eq!(actual, expected);
     }
@@ -139,7 +136,7 @@ mod tests {
         bytes.extend(RM_VALUE_LEN.to_be_bytes());
         bytes.extend(b"foo");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Rm("foo".into());
         assert_eq!(actual, expected);
     }
@@ -151,7 +148,7 @@ mod tests {
         bytes.extend(GET_VALUE_LEN.to_be_bytes());
         bytes.extend(b"foo");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Get("foo".into());
         assert_eq!(actual, expected);
     }
@@ -163,7 +160,7 @@ mod tests {
         bytes.extend(6u64.to_be_bytes());
         bytes.extend(b"foofoobar_ignoreme");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Set("foo".into(), "foobar".into());
         assert_eq!(actual, expected);
     }
@@ -175,7 +172,7 @@ mod tests {
         bytes.extend(RM_VALUE_LEN.to_be_bytes());
         bytes.extend(b"foo_ignoreme");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Rm("foo".into());
         assert_eq!(actual, expected);
     }
@@ -187,7 +184,7 @@ mod tests {
         bytes.extend(GET_VALUE_LEN.to_be_bytes());
         bytes.extend(b"foo_ignoreme");
 
-        let actual = Cmd::parse(&bytes).unwrap();
+        let actual = parse(&bytes).unwrap();
         let expected = Cmd::Get("foo".into());
         assert_eq!(actual, expected);
     }
@@ -200,9 +197,9 @@ mod tests {
 
         let mut buf = vec![];
 
-        proto.write(&mut buf).unwrap();
+        assert_eq!(proto.write(&mut buf).unwrap(), 19);
 
-        assert_eq!(Cmd::parse(&buf).unwrap(), proto);
+        assert_eq!(parse(&buf).unwrap(), proto);
     }
 
     #[test]
@@ -212,9 +209,9 @@ mod tests {
 
         let mut buf = vec![];
 
-        proto.write(&mut buf).unwrap();
+        assert_eq!(proto.write(&mut buf).unwrap(), 15);
 
-        assert_eq!(Cmd::parse(&buf).unwrap(), proto);
+        assert_eq!(parse(&buf).unwrap(), proto);
     }
 
     #[test]
@@ -224,9 +221,9 @@ mod tests {
 
         let mut buf = vec![];
 
-        proto.write(&mut buf).unwrap();
+        assert_eq!(proto.write(&mut buf).unwrap(), 15);
 
-        assert_eq!(Cmd::parse(&buf).unwrap(), proto);
+        assert_eq!(parse(&buf).unwrap(), proto);
     }
 
     mod len_check_tests {
@@ -239,7 +236,7 @@ mod tests {
             bytes.extend(GET_VALUE_LEN.to_be_bytes());
             bytes.extend(b"fo");
 
-            assert!(Cmd::parse(&bytes).is_err());
+            assert!(parse(&bytes).is_err());
         }
 
         #[test]
@@ -249,7 +246,7 @@ mod tests {
             bytes.extend(5u64.to_be_bytes());
             bytes.extend(b"foolsbars");
 
-            assert!(Cmd::parse(&bytes).is_err());
+            assert!(parse(&bytes).is_err());
         }
 
         #[test]
@@ -259,7 +256,7 @@ mod tests {
             bytes.extend(RM_VALUE_LEN.to_be_bytes());
             bytes.extend(b"fool");
 
-            assert!(Cmd::parse(&bytes).is_err());
+            assert!(parse(&bytes).is_err());
         }
         #[test]
         fn get_checks_len() {
@@ -268,12 +265,12 @@ mod tests {
             bytes.extend(GET_VALUE_LEN.to_be_bytes());
             bytes.extend(b"fool");
 
-            assert!(Cmd::parse(&bytes).is_err());
+            assert!(parse(&bytes).is_err());
         }
     }
 
     #[test]
     fn empty_command() {
-        assert!(Cmd::parse(b"").is_err());
+        assert!(parse(b"").is_err());
     }
 }

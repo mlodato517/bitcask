@@ -1,12 +1,12 @@
 use std::borrow::Borrow;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use kvs::{KvStore, KvsEngine};
-use protocol::{Cmd, Response};
+use protocol::{Cmd, Reader, Response};
 use tracing::{debug, info, warn};
 
 use sled_engine::SledDb;
@@ -47,17 +47,20 @@ fn main() -> Result<()> {
     };
     info!(?args.addr, ?dir, ?engine, version=env!("CARGO_PKG_VERSION"), "Starting server");
 
+    let mut reader = Reader::new();
+
     for stream in listener.incoming() {
         let mut stream = stream?;
         info!(?stream, "Received connection");
 
-        // TODO BufReader? Read timeout? Read incrementally? Use len to read more if needed?
-        let mut buf = vec![];
-        stream.read_to_end(&mut buf)?;
-        debug!(?buf, "Current buffer");
-
-        let cmd = match Cmd::parse(&buf) {
-            Ok(cmd) => cmd,
+        let cmd = match reader.read_cmd(&mut stream) {
+            Ok(Some(cmd)) => cmd,
+            Ok(None) => {
+                warn!("Response had no data");
+                stream.write_all(b"Response had no data")?;
+                stream.flush()?;
+                break;
+            }
             Err(e) => {
                 warn!(?e, "Failed to parse command");
                 let e = e.to_string();
@@ -68,7 +71,7 @@ fn main() -> Result<()> {
         };
 
         info!(?cmd, "Parsed command");
-        let response = match cmd {
+        let response = match cmd.into_cmd() {
             Cmd::Set(k, v) => handle_set(&mut kvs, k.to_string(), &v),
             Cmd::Get(k) => handle_get(&mut kvs, &k),
             Cmd::Rm(k) => handle_rm(&mut kvs, &k),
