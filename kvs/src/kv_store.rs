@@ -3,9 +3,10 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, Write};
+use std::io::{Seek, SeekFrom};
 use std::path::PathBuf;
 
+use protocol::{Cmd, Reader};
 use tracing::debug;
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
@@ -29,6 +30,7 @@ pub struct KvStore<C = MaxFilePolicy> {
     dir: PathBuf,
     immutable_files: Vec<LogFile>,
     index: HashMap<String, Index>,
+    cmd_reader: Reader,
 }
 struct Index {
     file_idx: usize,
@@ -83,6 +85,7 @@ impl<C> KvStore<C> {
             dir: dir_path,
             dead_data_count: 0,
             compaction_policy,
+            cmd_reader: Default::default(),
         };
 
         this.hydrate()?;
@@ -96,28 +99,35 @@ impl<C> KvStore<C> {
         for (file_idx, f) in self.immutable_files.iter_mut().enumerate() {
             // Count up the size of dead records in immutable files. When there are "enough", we
             // can compact all the immutable files into a single file.
-            self.dead_data_count += Self::hydrate_file(&mut self.index, &mut f.file, file_idx)?;
+            self.dead_data_count +=
+                Self::hydrate_file(&mut self.index, &mut self.cmd_reader, &mut f.file, file_idx)?;
         }
-        Self::hydrate_file(&mut self.index, &mut self.active_file.file, ACTIVE_FILE_IDX)?;
+        Self::hydrate_file(
+            &mut self.index,
+            &mut self.cmd_reader,
+            &mut self.active_file.file,
+            ACTIVE_FILE_IDX,
+        )?;
         Ok(())
     }
 
     fn hydrate_file(
         in_memory_index: &mut HashMap<String, Index>,
+        reader: &mut Reader,
         file: &mut File,
         file_idx: usize,
     ) -> Result<usize> {
         let mut dead_data_count = 0;
         file.rewind()?;
-        let mut f = BufReader::new(file);
 
-        let mut line = String::new();
         let mut file_offset = 0;
-        while f.read_line(&mut line)? > 0 {
-            let line_len = line.len();
-            let trimmed = line.trim_end();
-
-            let command: Command = serde_json::from_str(trimmed)?;
+        while let Some(read_result) = reader.read_cmd(&mut *file)? {
+            let bytes_read = read_result.bytes_read();
+            let command = match read_result.into_cmd() {
+                Cmd::Set(key, value) => Command::Set(key, value),
+                Cmd::Rm(key) => Command::Rm(key),
+                Cmd::Get(_) => panic!("Found Get command stored in file!"),
+            };
             let index = Index {
                 file_idx,
                 file_offset,
@@ -130,8 +140,7 @@ impl<C> KvStore<C> {
                 dead_data_count += 1;
             }
 
-            file_offset += line_len as u64;
-            line.clear();
+            file_offset += bytes_read as u64;
         }
 
         Ok(dead_data_count)
@@ -159,21 +168,24 @@ impl<C> KvStore<C> {
         compacted_path.push(compacted_file_name);
         let mut compacted_file = LogFile::new(compacted_path)?;
 
-        for (key, file_index) in &mut self.index {
+        for file_index in self.index.values_mut() {
             // Only compact immutable files
             if file_index.file_idx == ACTIVE_FILE_IDX {
                 continue;
             }
-            let file = &self.immutable_files[file_index.file_idx].file;
-            let value = file_util::seek_file_for_value(file, file_index.file_offset)?
-                .expect("Values in the index should be present");
-            let cmd = Command::Set(Cow::Borrowed(key), Cow::Owned(value));
+            let mut file = &self.immutable_files[file_index.file_idx].file;
+
+            file.seek(SeekFrom::Start(file_index.file_offset))?;
+            let cmd = self
+                .cmd_reader
+                .read_cmd(file)?
+                .expect("Should be command at position indicated by index")
+                .into_cmd();
 
             // TODO Extract with write_cmd
             let file_offset = compacted_file.len;
-            let value = format!("{}\n", serde_json::to_string(&cmd)?);
-            compacted_file.len += value.len() as u64;
-            compacted_file.file.write_all(value.as_bytes())?;
+            let bytes_written = cmd.write(&mut compacted_file.file)?;
+            compacted_file.len += bytes_written as u64;
 
             *file_index = Index {
                 file_idx: 0,
@@ -198,15 +210,17 @@ impl<C: CompactionPolicy> KvStore<C> {
         let f = &mut self.active_file;
         let file_offset = f.len;
 
-        // TODO Could we write directly to the file and get back out num bytes written?
-        // TODO Maybe handle carriage returns? `std::writeln!` doesn't care :shrug:
-        let value = format!("{}\n", serde_json::to_string(&cmd)?);
-        f.len += value.len() as u64;
-        f.file.write_all(value.as_bytes())?;
+        let cmd = match cmd {
+            Command::Rm(key) => Cmd::Rm(key),
+            Command::Set(key, value) => Cmd::Set(key, value),
+        };
+        let len = cmd.write(&f.file)?;
+        f.len += len as u64;
 
         let key = match cmd {
-            Command::Rm(key) => key,
-            Command::Set(key, _) => key,
+            // TODO This Get doesn't make sense
+            Cmd::Rm(key) | Cmd::Get(key) => key,
+            Cmd::Set(key, _) => key,
         };
 
         let index = Index {
@@ -257,11 +271,25 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
                 file_offset,
                 file_idx,
             }) => {
-                let file = match *file_idx {
+                let mut file = match *file_idx {
                     ACTIVE_FILE_IDX => &self.active_file.file,
                     idx => &self.immutable_files[idx].file,
                 };
-                file_util::seek_file_for_value(file, *file_offset)
+                file.seek(SeekFrom::Start(*file_offset))?;
+
+                // TODO This copies from file -> reader -> String output.
+                // We should be able to save a copy by copying directly to the String...
+                match self
+                    .cmd_reader
+                    .read_cmd(file)?
+                    .expect("Should be command at position indicated by index")
+                    .into_cmd()
+                {
+                    Cmd::Set(_, value) => Ok(Some(value.into_owned())),
+                    // TODO Remove Rm command keys from in-memory index.
+                    Cmd::Rm(_) => Ok(None),
+                    Cmd::Get(_) => panic!("Get commands shouldn't be written!"),
+                }
             }
             None => Ok(None),
         }
