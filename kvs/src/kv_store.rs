@@ -25,7 +25,6 @@ const ACTIVE_FILE_IDX: usize = usize::MAX;
 pub struct KvStore<C = MaxFilePolicy> {
     active_file: LogFile,
     compaction_policy: C,
-    dead_data_count: usize,
     dir: PathBuf,
     immutable_files: Vec<LogFile>,
     index: HashMap<String, Index>,
@@ -82,7 +81,6 @@ impl<C> KvStore<C> {
             active_file,
             immutable_files,
             dir: dir_path,
-            dead_data_count: 0,
             compaction_policy,
             cmd_reader: Default::default(),
         };
@@ -96,10 +94,7 @@ impl<C> KvStore<C> {
     /// just read the most recent command for the key in the file.
     fn hydrate(&mut self) -> Result<()> {
         for (file_idx, f) in self.immutable_files.iter_mut().enumerate() {
-            // Count up the size of dead records in immutable files. When there are "enough", we
-            // can compact all the immutable files into a single file.
-            self.dead_data_count +=
-                Self::hydrate_file(&mut self.index, &mut self.cmd_reader, &mut f.file, file_idx)?;
+            Self::hydrate_file(&mut self.index, &mut self.cmd_reader, &mut f.file, file_idx)?;
         }
         Self::hydrate_file(
             &mut self.index,
@@ -115,8 +110,7 @@ impl<C> KvStore<C> {
         reader: &mut Reader,
         file: &mut File,
         file_idx: usize,
-    ) -> Result<usize> {
-        let mut dead_data_count = 0;
+    ) -> Result<()> {
         file.rewind()?;
 
         let mut file_offset = 0;
@@ -126,21 +120,18 @@ impl<C> KvStore<C> {
                 file_idx,
                 file_offset,
             };
-            let previous_value = match read_result.into_cmd() {
+            match read_result.into_cmd() {
                 Cmd::Set(key, _) => in_memory_index.insert(key.into_owned(), index),
                 Cmd::Rm(key) => in_memory_index.remove(key.as_ref()),
 
                 // TODO Should there be another type to prevent this confusion?
                 Cmd::Get(_) => panic!("Found Get command stored in file!"),
             };
-            if let Some(_previous_value) = previous_value {
-                dead_data_count += 1;
-            }
 
             file_offset += bytes_read as u64;
         }
 
-        Ok(dead_data_count)
+        Ok(())
     }
 
     // TODO More atomically? How do we handle concurrent compaction requests? Should probably take
@@ -194,9 +185,6 @@ impl<C> KvStore<C> {
         }
         self.immutable_files.push(compacted_file);
 
-        // TODO LIES
-        self.dead_data_count = 0;
-
         Ok(())
     }
 }
@@ -221,11 +209,7 @@ impl<C: CompactionPolicy> KvStore<C> {
             file_idx: ACTIVE_FILE_IDX,
         };
 
-        if let Some(previous_value) = self.index.insert(key.into_owned(), index) {
-            if previous_value.file_idx != ACTIVE_FILE_IDX {
-                self.dead_data_count += 1;
-            }
-        }
+        self.index.insert(key.into_owned(), index);
 
         // TODO Configure?
         if file_offset > FILE_SIZE_LIMIT {
@@ -245,7 +229,6 @@ impl<C: CompactionPolicy> KvStore<C> {
 
         let state = CompactionContext {
             open_immutable_files: self.immutable_files.len(),
-            dead_commands: self.dead_data_count,
         };
 
         if CompactionPolicy::should_compact(&self.compaction_policy, state) {
