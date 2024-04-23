@@ -12,7 +12,6 @@ use tracing::{debug, trace};
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
 use crate::engine::KvsEngine;
 use crate::file_util;
-use crate::Command;
 use crate::{Error, Result};
 
 // TODO Need to find a balance between:
@@ -123,18 +122,16 @@ impl<C> KvStore<C> {
         let mut file_offset = 0;
         while let Some(read_result) = reader.read_cmd(&mut *file)? {
             let bytes_read = read_result.bytes_read();
-            let command = match read_result.into_cmd() {
-                Cmd::Set(key, value) => Command::Set(key, value),
-                Cmd::Rm(key) => Command::Rm(key),
-                Cmd::Get(_) => panic!("Found Get command stored in file!"),
-            };
             let index = Index {
                 file_idx,
                 file_offset,
             };
-            let previous_value = match command {
-                Command::Set(key, _) => in_memory_index.insert(key.into_owned(), index),
-                Command::Rm(key) => in_memory_index.remove(key.as_ref()),
+            let previous_value = match read_result.into_cmd() {
+                Cmd::Set(key, _) => in_memory_index.insert(key.into_owned(), index),
+                Cmd::Rm(key) => in_memory_index.remove(key.as_ref()),
+
+                // TODO Should there be another type to prevent this confusion?
+                Cmd::Get(_) => panic!("Found Get command stored in file!"),
             };
             if let Some(_previous_value) = previous_value {
                 dead_data_count += 1;
@@ -206,19 +203,15 @@ impl<C> KvStore<C> {
 
 impl<C: CompactionPolicy> KvStore<C> {
     /// Appends the command to the end of the file with a trailing newline
-    fn write_cmd(&mut self, cmd: Command) -> Result<()> {
+    fn write_cmd(&mut self, cmd: Cmd) -> Result<()> {
         let f = &mut self.active_file;
         let file_offset = f.len;
 
-        let cmd = match cmd {
-            Command::Rm(key) => Cmd::Rm(key),
-            Command::Set(key, value) => Cmd::Set(key, value),
-        };
         let len = cmd.write(&f.file)?;
         f.len += len as u64;
 
         let key = match cmd {
-            // TODO This Get doesn't make sense
+            // TODO Should there be another type to prevent this confusion?
             Cmd::Rm(key) | Cmd::Get(key) => key,
             Cmd::Set(key, _) => key,
         };
@@ -287,6 +280,7 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
                 {
                     Cmd::Set(_, value) => Ok(Some(value.into_owned())),
                     Cmd::Rm(_) => panic!("Rm'ved keys shouldn't be in the index!"),
+                    // TODO Should there be another type to prevent this confusion?
                     Cmd::Get(_) => panic!("Get commands shouldn't be written!"),
                 }
             }
@@ -297,7 +291,7 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
     /// Associate the passed value with the passed key in the store. This can later be retrieved
     /// with `get`.
     fn set<V: AsRef<str>>(&mut self, key: String, value: V) -> Result<()> {
-        let cmd = Command::Set(key.into(), Cow::Borrowed(value.as_ref()));
+        let cmd = Cmd::Set(key.into(), Cow::Borrowed(value.as_ref()));
         self.write_cmd(cmd)
     }
 
@@ -306,7 +300,7 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
         match self.get(key.borrow())? {
             Some(_) => {
                 debug!("Key found, deleting it");
-                let result = self.write_cmd(Command::Rm(key.borrow().into()));
+                let result = self.write_cmd(Cmd::Rm(key.borrow().into()));
                 if result.is_ok() {
                     trace!(key = ?key.borrow(), "Removing key from in-memory index");
                     self.index.remove(key.borrow());

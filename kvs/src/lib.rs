@@ -3,14 +3,12 @@
 //!
 //! Built following https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md.
 
-mod command;
 mod compaction_policy;
 mod engine;
 mod error;
 mod file_util;
 mod kv_store;
 
-pub(crate) use command::Command;
 pub use engine::KvsEngine;
 pub use error::{Error, Result};
 pub use kv_store::KvStore;
