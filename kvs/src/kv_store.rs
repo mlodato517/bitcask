@@ -7,7 +7,7 @@ use std::io::{Seek, SeekFrom};
 use std::path::PathBuf;
 
 use protocol::{Cmd, Reader};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
 use crate::engine::KvsEngine;
@@ -286,8 +286,7 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
                     .into_cmd()
                 {
                     Cmd::Set(_, value) => Ok(Some(value.into_owned())),
-                    // TODO Remove Rm command keys from in-memory index.
-                    Cmd::Rm(_) => Ok(None),
+                    Cmd::Rm(_) => panic!("Rm'ved keys shouldn't be in the index!"),
                     Cmd::Get(_) => panic!("Get commands shouldn't be written!"),
                 }
             }
@@ -307,7 +306,12 @@ impl<C: CompactionPolicy> KvsEngine for KvStore<C> {
         match self.get(key.borrow())? {
             Some(_) => {
                 debug!("Key found, deleting it");
-                self.write_cmd(Command::Rm(key.borrow().into()))
+                let result = self.write_cmd(Command::Rm(key.borrow().into()));
+                if result.is_ok() {
+                    trace!(key = ?key.borrow(), "Removing key from in-memory index");
+                    self.index.remove(key.borrow());
+                }
+                result
             }
             None => {
                 debug!("Key to remove not found");
