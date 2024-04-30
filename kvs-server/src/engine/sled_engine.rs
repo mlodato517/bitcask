@@ -1,8 +1,11 @@
+//! A wrapper around [`sled::Db`] so it can be used as a [`KvsEngine`].
+
 use std::borrow::Borrow;
 
 use kvs::{Error, KvsEngine, Result};
 
-pub struct SledDb(pub sled::Db);
+/// A wrapper around [`sled::Db`] so it can be used as a [`KvsEngine`].
+pub struct SledDb(pub(crate) sled::Db);
 
 impl Drop for SledDb {
     fn drop(&mut self) {
