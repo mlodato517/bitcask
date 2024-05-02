@@ -13,3 +13,12 @@ logging = { path = "../logging" }
 protocol = { path = "../protocol" }
 sled = "0.34.7"
 tracing = "0.1.37"
+
+[dev-dependencies]
+criterion = "0.5"
+rand = "0.8"
+tempfile = "3"
+
+[[bench]]
+name = "bench"
+harness = false
