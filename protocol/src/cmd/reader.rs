@@ -7,7 +7,7 @@
 use std::io::{ErrorKind, Read};
 
 // TODO More specific crate error
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 
 use super::{Cmd, GET_VALUE_LEN, HEADER_BYTES, RM_VALUE_LEN};
 
@@ -33,96 +33,57 @@ impl<'a> ReadResult<'a> {
 
 struct CmdReader<R> {
     reader: R,
-    state: CmdReadState,
-}
-
-enum CmdReadState {
-    ReadingHeader {
-        header_bytes: [u8; HEADER_BYTES],
-        bytes_read: usize,
-    },
-    ReadingCmd {
-        expected_len: usize,
-        bytes_read: usize,
-    },
 }
 
 impl<R> CmdReader<R> {
     pub fn new(reader: R) -> Self {
-        Self {
-            reader,
-            state: CmdReadState::ReadingHeader {
-                header_bytes: [0; HEADER_BYTES],
-                bytes_read: 0,
-            },
-        }
+        Self { reader }
     }
 }
 
-impl<R: Read> Read for CmdReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match &mut self.state {
-            CmdReadState::ReadingHeader {
-                header_bytes,
-                bytes_read,
-            } => {
-                let bytes_left = header_bytes.len() - *bytes_read;
-                let bytes_to_read = bytes_left.min(buf.len());
-                let new_bytes_read = loop {
-                    match self
-                        .reader
-                        .read(&mut header_bytes[*bytes_read..*bytes_read + bytes_to_read])
-                    {
-                        // Caller passed in an empty buffer, so we can't read anything.
-                        Ok(0) => return Ok(0),
-                        Ok(n) => break n,
-                        Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                        Err(e) => return Err(e),
-                    }
-                };
-
-                // Copy the read bytes into the caller's buffer.
-                buf[..new_bytes_read]
-                    .copy_from_slice(&header_bytes[*bytes_read..*bytes_read + new_bytes_read]);
-
-                // Move to the next state if it's time.
-                *bytes_read += new_bytes_read;
-                if *bytes_read == header_bytes.len() {
-                    let (key_len, value_len) = Cmd::parse_header(*header_bytes);
-                    let total_len = match value_len {
-                        GET_VALUE_LEN | RM_VALUE_LEN => key_len as usize,
-                        value_len => key_len as usize + value_len as usize,
-                    };
-
-                    self.state = CmdReadState::ReadingCmd {
-                        bytes_read: 0,
-                        expected_len: total_len,
-                    };
+impl<R: Read> CmdReader<R> {
+    pub fn read_cmd_bytes(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let mut header_bytes = [0; HEADER_BYTES];
+        let mut total_read = 0;
+        loop {
+            match self.reader.read(&mut header_bytes[total_read..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total_read += n;
+                    continue;
                 }
-
-                Ok(new_bytes_read)
-            }
-            CmdReadState::ReadingCmd {
-                bytes_read,
-                expected_len,
-            } => {
-                let bytes_left = *expected_len - *bytes_read;
-                let bytes_to_read = bytes_left.min(buf.len());
-                if bytes_to_read == 0 {
-                    return Ok(0);
-                }
-                let new_bytes_read = loop {
-                    match self.reader.read(&mut buf[..bytes_to_read]) {
-                        Ok(n) => break n,
-                        Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                        Err(e) => return Err(e),
-                    }
-                };
-
-                *bytes_read += new_bytes_read;
-                Ok(new_bytes_read)
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                err => return err.context("reading cmd header"),
             }
         }
+
+        // The reader was empty -- return EOF.
+        if total_read == 0 {
+            return Ok(0);
+        }
+
+        ensure!(
+            total_read == header_bytes.len(),
+            "Not enough bytes for header"
+        );
+
+        let (key_len, value_len) = Cmd::parse_header(header_bytes);
+        let body_len = match value_len {
+            GET_VALUE_LEN | RM_VALUE_LEN => key_len as usize,
+            value_len => key_len as usize + value_len as usize,
+        };
+        let total_len = header_bytes.len() + body_len;
+
+        if buf.len() < total_len {
+            buf.resize(total_len, 0);
+        }
+
+        buf[..header_bytes.len()].copy_from_slice(&header_bytes);
+        self.reader
+            .read_exact(&mut buf[header_bytes.len()..total_len])
+            .context("reading cmd body")?;
+
+        Ok(total_len)
     }
 }
 
@@ -153,9 +114,8 @@ impl Reader {
         let mut cmd_reader = CmdReader::new(reader);
 
         // Clear buffer because `read_to_end` appends bytes.
-        self.buf.clear();
         let bytes_read = cmd_reader
-            .read_to_end(&mut self.buf)
+            .read_cmd_bytes(&mut self.buf)
             .context("reading command bytes")?;
 
         if bytes_read == 0 {
