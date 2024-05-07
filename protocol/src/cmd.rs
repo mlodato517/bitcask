@@ -6,7 +6,7 @@ use std::io::Write;
 // TODO More specific crate error
 use anyhow::{Error, Result};
 
-pub use reader::Reader;
+pub use reader::{CmdReader, Reader};
 
 mod reader;
 

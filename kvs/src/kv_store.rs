@@ -3,10 +3,10 @@
 use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use protocol::{Cmd, Reader};
+use protocol::{Cmd, CmdReader, Reader};
 use tracing::{debug, trace};
 
 use crate::compaction_policy::{CompactionContext, CompactionPolicy, MaxFilePolicy};
@@ -156,6 +156,8 @@ impl<C> KvStore<C> {
         compacted_path.push(compacted_file_name);
         let mut compacted_file = LogFile::new(compacted_path)?;
 
+        // TODO Can this be simplified in the CmdReader or Reader abstractions?
+        let mut cmd_reader_buf = Vec::new();
         for file_index in self.index.values_mut() {
             // Only compact immutable files
             if file_index.file_idx == ACTIVE_FILE_IDX {
@@ -164,16 +166,14 @@ impl<C> KvStore<C> {
             let mut file = &self.immutable_files[file_index.file_idx].file;
 
             file.seek(SeekFrom::Start(file_index.file_offset))?;
-            let cmd = self
-                .cmd_reader
-                .read_cmd(file)?
-                .expect("Should be command at position indicated by index")
-                .into_cmd();
+            let cmd_bytes_len = CmdReader::new(file).read_cmd_bytes(&mut cmd_reader_buf)?;
 
-            // TODO Extract with write_cmd
+            // TODO impl Read for CmdReader and use std::io::copy
             let file_offset = compacted_file.len;
-            let bytes_written = cmd.write(&mut compacted_file.file)?;
-            compacted_file.len += bytes_written as u64;
+            compacted_file
+                .file
+                .write_all(&cmd_reader_buf[..cmd_bytes_len])?;
+            compacted_file.len += cmd_bytes_len as u64;
 
             *file_index = Index {
                 file_idx: 0,

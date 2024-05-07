@@ -6,5 +6,5 @@
 mod cmd;
 mod response;
 
-pub use cmd::{Cmd, Reader};
+pub use cmd::{Cmd, CmdReader, Reader};
 pub use response::Response;

@@ -31,7 +31,7 @@ impl<'a> ReadResult<'a> {
     }
 }
 
-struct CmdReader<R> {
+pub struct CmdReader<R> {
     reader: R,
 }
 
