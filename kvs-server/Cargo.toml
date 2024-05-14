@@ -11,14 +11,18 @@ clap = { version = "4.2.4", features = ["derive"] }
 kvs = { path = "../kvs" }
 logging = { path = "../logging" }
 protocol = { path = "../protocol" }
+rand = "0.8"
 sled = "0.34.7"
+tempfile = "3"
 tracing = "0.1.37"
 
 [dev-dependencies]
 criterion = "0.5"
-rand = "0.8"
-tempfile = "3"
 
 [[bench]]
-name = "bench"
+name = "read"
+harness = false
+
+[[bench]]
+name = "write"
 harness = false
